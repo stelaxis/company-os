@@ -1,7 +1,7 @@
 {
   // Cloudflare account that owns every Worker and provisioned resource.
   // Find it: https://developers.cloudflare.com/fundamentals/account/find-account-and-zone-ids/
-  "accountId": "<CLOUDFLARE_ACCOUNT_ID>",
+  "accountId": "28387d6b230675d05fef82909079476c",
 
   // The deployment's public origin, used for PUBLIC_BASE_URL and to scope Context data.
   // null derives it from workers.router.route.customDomain.
@@ -16,24 +16,27 @@
     // Owns the public URL and serves the frontend. Proxies /api and /blueprint-screenshot to the
     // Workshop, and /gatekeeper/<name> to the matching Gatekeeper.
     "router": {
-      "name": "<ROUTER_WORKER_NAME>",
+      "name": "stelaxis-os-router",
 
       // Production: use a hostname in an active Cloudflare zone. Wrangler creates DNS and TLS.
       // Evaluation: replace this with "route": { "workersDev": true } and set publicBaseUrl above.
       // https://developers.cloudflare.com/workers/configuration/routing/custom-domains/
-      "route": { "customDomain": "os.example.com" }
+      "route": { "customDomain": "os.stelaxis.org" }
     },
 
     // The Workshop backend. No public route: the router reaches it over a service binding.
-    "workshop": { "name": "<WORKSHOP_WORKER_NAME>" },
-    "context": { "name": "<CONTEXT_WORKER_NAME>" },
+    "workshop": { "name": "stelaxis-os-workshop" },
+    "context": { "name": "stelaxis-os-context" },
 
     // The Scheduler Gatekeeper, which gives agents scheduled and recurring work. Ambient like
     // the Context Gatekeeper
-    "scheduler": { "name": "<SCHEDULER_WORKER_NAME>" },
+    "scheduler": { "name": "stelaxis-os-scheduler" },
 
-    "customGatekeeper": { "name": "<CUSTOM_GATEKEEPER_WORKER_NAME>" },
-    "errorReporter": { "name": "<ERROR_REPORTER_WORKER_NAME>" }
+    "customGatekeeper": { "name": "stelaxis-os-gatekeeper" },
+
+    // The Book Gatekeeper, which mirrors a Git directory read-only on a cron.
+    "book": { "name": "stelaxis-os-book" },
+    "errorReporter": { "name": "stelaxis-os-error-reporter" }
   },
 
   // This starter deploys Cloudflare Access mode. Cloudflare OS also supports built-in password
@@ -42,9 +45,9 @@
   // "admins" gates /admin in every sign-in method.
   // Reference: docs/customization.md#sign-in-methods
   "access": {
-    "issuer": "https://<TEAM_NAME>.cloudflareaccess.com",
-    "audience": "<ACCESS_AUDIENCE>",
-    "admins": ["<ADMIN_EMAIL>"]
+    "issuer": "https://stelaxis.cloudflareaccess.com",
+    "audience": "e1553fc438d5a65cee7fa582659c132c9a7da82c099f40c1792f096c900d64cb",
+    "admins": ["andrey.rudenko@stelaxis.com"]
   },
 
   // Model catalog served through Cloudflare AI Gateway. Enabled by default: the Workshop reaches
@@ -65,7 +68,7 @@
 
     // "cloudflare" is Workers AI, which needs no key of your own. anthropic/openai need keys
     // stored on the gateway; "google" additionally requires CF_AI_GATEWAY_API_TOKEN.
-    "providers": ["cloudflare"]
+    "providers": ["cloudflare", "anthropic"]
   },
 
   "context": {
@@ -86,11 +89,25 @@
     // }
   },
 
+  // The Book Gatekeeper mirrors one directory of one branch and serves it read-only. The
+  // GitHub credential is a Wrangler secret, never a value in this file:
+  //   pnpm exec wrangler secret put GITHUB_TOKEN --name stelaxis-os-book
+  // Use a fine-grained token limited to Contents: Read on the repository below.
+  "book": {
+    "displayName": "Stelaxis Book",
+    "repo": {
+      "owner": "stelaxis",
+      "name": "stelaxis",
+      "branch": "main",
+      "path": "docs/book"
+    }
+  },
+
   // Displayed to agents when the example custom integration is enabled in /admin.
   // Reference: docs/customization.md#custom-gatekeepers
   "customGatekeeper": {
-    "name": "<ORGANIZATION_DISPLAY_NAME>",
-    "message": "<ORGANIZATION_GUIDANCE>"
+    "name": "Stelaxis",
+    "message": "Internal Stelaxis deployment. Ask this gatekeeper for organization-specific context before acting on company data."
   },
 
   // Explicit backend issue reports go to a private Worker that emits structured console errors.

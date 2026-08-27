@@ -19,6 +19,7 @@ const validConfig: DeploymentConfig = {
     context: { name: "acme-cloudflare-os-context" },
     scheduler: { name: "acme-cloudflare-os-scheduler" },
     customGatekeeper: { name: "acme-cloudflare-os-custom" },
+    book: { name: "acme-cloudflare-os-book" },
     errorReporter: { name: "acme-cloudflare-os-errors" },
   },
   access: {
@@ -38,6 +39,10 @@ const validConfig: DeploymentConfig = {
     artifacts: { enabled: true, namespace: "acme-context-collections" },
   },
   customGatekeeper: { name: "Acme", message: "Use the company handbook." },
+  book: {
+    displayName: "Acme Book",
+    repo: { owner: "acme", name: "acme", branch: "main", path: "docs/book" },
+  },
   errorReporting: { enabled: true, environment: "production", release: "abc123" },
   resources: {
     blueprintsKvNamespaceId: "blueprints-kv-id",
@@ -74,6 +79,7 @@ async function baseConfigs(): Promise<BaseConfigs> {
     context: await baseConfig("../cloudflare-os/packages/gatekeeper-context/wrangler.jsonc"),
     scheduler: await baseConfig("../cloudflare-os/packages/gatekeeper-scheduler/wrangler.jsonc"),
     customGatekeeper: await baseConfig("../packages/custom-gatekeeper/wrangler.jsonc"),
+    book: await baseConfig("../packages/gatekeeper-book/wrangler.jsonc"),
     errorReporter: await baseConfig("../packages/error-reporter/wrangler.jsonc"),
   };
 }
@@ -225,6 +231,11 @@ test("generates Access-mode Workshop, Context, and custom Gatekeeper configs", a
       service: "acme-cloudflare-os-custom",
       entrypoint: "GatekeeperVendor",
     },
+    {
+      binding: "GATEKEEPER_BOOK",
+      service: "acme-cloudflare-os-book",
+      entrypoint: "GatekeeperVendor",
+    },
   ]);
   assert.deepEqual(generated.workshop.kv_namespaces, [
     { binding: "BLUEPRINTS", id: "blueprints-kv-id" },
@@ -261,13 +272,14 @@ test("gives the router the public route, the frontend, and every service binding
   assert.equal(generated.router.name, "acme-cloudflare-os");
   assert.equal(generated.router.workers_dev, false);
   assert.deepEqual(generated.router.routes, [{ pattern: "os.example.com", custom_domain: true }]);
-  // No entrypoint on any of the three: the router forwards whole HTTP requests rather than making
+  // No entrypoint on any Gatekeeper: the router forwards whole HTTP requests rather than making
   // vendor RPC calls, and the binding name is what selects the /gatekeeper/<name> path.
   assert.deepEqual(generated.router.services, [
     { binding: "WORKSHOP_BACKEND", service: "acme-cloudflare-os-backend" },
     { binding: "GATEKEEPER_CONTEXT", service: "acme-cloudflare-os-context" },
     { binding: "GATEKEEPER_SCHEDULER", service: "acme-cloudflare-os-scheduler" },
     { binding: "GATEKEEPER_CUSTOM", service: "acme-cloudflare-os-custom" },
+    { binding: "GATEKEEPER_BOOK", service: "acme-cloudflare-os-book" },
   ]);
   // Inherited untouched: the base config already carries the ASSETS binding, the SPA fallback, and
   // the /gatekeeper/* prefix an OAuth Gatekeeper redirect needs.
@@ -315,6 +327,33 @@ test("deploys the ambient Scheduler Gatekeeper the hosted flow preinstalls", asy
     .map(({ args }) => args)
     .filter((args) => args.includes("@gadgets/gatekeeper-scheduler"));
   assert.deepEqual(builds.map((args) => args.at(-1)), ["build:app", "build"]);
+});
+
+test("gives the Book Gatekeeper its repository, its secret, and its schedule", async () => {
+  const bases = await baseConfigs();
+  const generated = generateConfigs(validConfig, bases);
+
+  assert.equal(generated.book.name, "acme-cloudflare-os-book");
+  assert.deepEqual(generated.book.vars, {
+    BOOK_DISPLAY_NAME: "Acme Book",
+    BOOK_REPO_OWNER: "acme",
+    BOOK_REPO_NAME: "acme",
+    BOOK_REPO_BRANCH: "main",
+    BOOK_REPO_PATH: "docs/book",
+  });
+  // Declared so wrangler refuses a Worker whose first cron tick would fail on a missing credential.
+  assert.deepEqual(generated.book.secrets, { required: ["GITHUB_TOKEN"] });
+  // The cadence belongs to the mirror, not the deployment: it survives generation untouched and
+  // nothing in deployment.jsonc can reach it.
+  assert.deepEqual(generated.book.triggers, bases.book.triggers);
+  assert.deepEqual(generated.book.triggers!.crons, ["*/5 * * * *"]);
+});
+
+test("trims a trailing slash from the mirrored path", async () => {
+  // The sync builds its prefix as `${path}/`, so a trailing slash here would produce "docs/book//".
+  const trailing = variant((c) => { c.book.repo.path = "docs/book/"; });
+  const generated = generateConfigs(trailing, await baseConfigs());
+  assert.equal(generated.book.vars!.BOOK_REPO_PATH, "docs/book");
 });
 
 test("keeps every Worker behind the router off the public internet", async () => {

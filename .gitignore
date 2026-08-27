@@ -1,5 +1,13 @@
 node_modules/
 packages/*/dist/
+packages/*/dist-app/
+# Built by `build:app`, like upstream's own gatekeeper app bundles.
+packages/*/src/generated/app.txt
 packages/*/.wrangler/
 packages/*/wrangler.prod.jsonc
+# Written by the upstream dev server when a wrapper gatekeeper is linked into
+# cloudflare-os/packages for local runs. Upstream ignores its own copies too.
+packages/*/wrangler.dev.jsonc
+# Local secrets for `wrangler dev`. Never commit: these are real credentials.
+packages/*/.dev.vars
 deployment.local.jsonc

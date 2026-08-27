@@ -1,0 +1,77 @@
+/* Self-contained: the app is a sandboxed opaque-origin iframe, so it inherits no Workshop CSS.
+   Colours go through light-dark() against the color-scheme the host's theme sets on <html>. */
+:root { color-scheme: light dark; }
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  font: 14px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  color: light-dark(oklch(0.25 0.01 285), oklch(0.93 0.006 285));
+  background: light-dark(oklch(0.985 0.002 285), oklch(0.19 0.008 285));
+}
+
+.page { max-width: 46rem; margin: 0 auto; padding: 1.5rem 1.25rem 3rem; }
+.header h1 { font-size: 1.35rem; margin: 0 0 0.15rem; }
+.muted { color: light-dark(oklch(0.52 0.01 285), oklch(0.68 0.01 285)); margin: 0.25rem 0 0; }
+.mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+
+.card {
+  margin-top: 1.25rem;
+  padding: 1rem 1.1rem;
+  border: 1px solid light-dark(oklch(0.9 0.004 285), oklch(0.3 0.008 285));
+  border-radius: 0.65rem;
+  background: light-dark(white, oklch(0.23 0.008 285));
+}
+.card h2 { font-size: 0.95rem; margin: 0 0 0.6rem; }
+
+.row { display: flex; align-items: center; gap: 0.65rem; }
+.headline { font-size: 1.05rem; font-weight: 600; flex: 1; }
+
+.dot { width: 0.6rem; height: 0.6rem; border-radius: 50%; flex: none; }
+.dot.ok   { background: oklch(0.72 0.17 150); }
+.dot.bad  { background: oklch(0.63 0.21 27); }
+.dot.idle { background: light-dark(oklch(0.8 0.01 285), oklch(0.45 0.01 285)); }
+
+button.primary {
+  font: inherit;
+  padding: 0.4rem 0.85rem;
+  border-radius: 0.4rem;
+  border: 1px solid transparent;
+  cursor: pointer;
+  color: white;
+  background: var(--color-kumo-brand, oklch(0.55 0.16 255));
+}
+button.primary:hover:not(:disabled) { background: var(--color-kumo-brand-hover, oklch(0.49 0.16 255)); }
+button.primary:disabled { opacity: 0.6; cursor: default; }
+
+.facts {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 0.3rem 1rem;
+  margin: 0.9rem 0 0;
+  font-size: 0.9rem;
+}
+.facts dt { color: light-dark(oklch(0.52 0.01 285), oklch(0.68 0.01 285)); }
+.facts dd { margin: 0; }
+
+.banner {
+  margin-top: 0.9rem;
+  padding: 0.6rem 0.75rem;
+  border-radius: 0.45rem;
+  font-size: 0.9rem;
+  border: 1px solid transparent;
+}
+.banner p { margin: 0.35rem 0 0; }
+.banner.ok   { background: light-dark(oklch(0.95 0.04 150), oklch(0.28 0.05 150)); }
+.banner.warn { background: light-dark(oklch(0.96 0.06 85),  oklch(0.3 0.06 85)); }
+.banner.bad  { background: light-dark(oklch(0.95 0.04 27),  oklch(0.3 0.07 27)); }
+
+.docs { list-style: none; margin: 0; padding: 0; }
+.docs li {
+  padding: 0.55rem 0;
+  border-top: 1px solid light-dark(oklch(0.93 0.004 285), oklch(0.28 0.008 285));
+}
+.docs li:first-child { border-top: none; }
+.doc-title { font-weight: 600; }
+.doc-path { font-size: 0.82rem; color: light-dark(oklch(0.52 0.01 285), oklch(0.68 0.01 285)); }

@@ -25,6 +25,7 @@ const packageDirs = {
   context: "cloudflare-os/packages/gatekeeper-context",
   scheduler: "cloudflare-os/packages/gatekeeper-scheduler",
   customGatekeeper: "packages/custom-gatekeeper",
+  book: "packages/gatekeeper-book",
   errorReporter: "packages/error-reporter",
 } as const;
 const generatedPaths = Object.fromEntries(
@@ -40,6 +41,7 @@ const requiredPaths = [
   "workers.context.name",
   "workers.scheduler.name",
   "workers.customGatekeeper.name",
+  "workers.book.name",
   "access.issuer",
   "access.audience",
   "access.admins",
@@ -47,6 +49,11 @@ const requiredPaths = [
   "errorReporting.enabled",
   "customGatekeeper.name",
   "customGatekeeper.message",
+  "book.displayName",
+  "book.repo.owner",
+  "book.repo.name",
+  "book.repo.branch",
+  "book.repo.path",
   "observability.enabled",
   "observability.headSamplingRate",
   "observability.logs.invocationLogs",
@@ -435,6 +442,7 @@ export function generateConfigs(config: DeploymentConfig, bases: BaseConfigs): G
   const context = structuredClone(bases.context);
   const scheduler = structuredClone(bases.scheduler);
   const customGatekeeper = structuredClone(bases.customGatekeeper);
+  const book = structuredClone(bases.book);
   const errorReporter = config.errorReporting.enabled
     ? structuredClone(bases.errorReporter)
     : undefined;
@@ -448,6 +456,7 @@ export function generateConfigs(config: DeploymentConfig, bases: BaseConfigs): G
     { binding: "GATEKEEPER_CONTEXT", service: config.workers.context.name },
     { binding: "GATEKEEPER_SCHEDULER", service: config.workers.scheduler.name },
     { binding: "GATEKEEPER_CUSTOM", service: config.workers.customGatekeeper.name },
+    { binding: "GATEKEEPER_BOOK", service: config.workers.book.name },
   ];
 
   setCommon(workshop, config, config.workers.workshop.name);
@@ -513,6 +522,11 @@ export function generateConfigs(config: DeploymentConfig, bases: BaseConfigs): G
       service: config.workers.customGatekeeper.name,
       entrypoint: "GatekeeperVendor",
     },
+    {
+      binding: "GATEKEEPER_BOOK",
+      service: config.workers.book.name,
+      entrypoint: "GatekeeperVendor",
+    },
   ];
   workshop.kv_namespaces = [
     { binding: "BLUEPRINTS", ...(config.resources.blueprintsKvNamespaceId
@@ -552,12 +566,27 @@ export function generateConfigs(config: DeploymentConfig, bases: BaseConfigs): G
     CUSTOM_MESSAGE: config.customGatekeeper.message,
   };
 
+  // The cron schedule stays as the package's wrangler.jsonc declares it: the cadence is a
+  // property of the mirror, not of the deployment, and nothing in deployment.jsonc can reach it.
+  setCommon(book, config, config.workers.book.name);
+  book.vars = {
+    BOOK_DISPLAY_NAME: config.book.displayName,
+    BOOK_REPO_OWNER: config.book.repo.owner,
+    BOOK_REPO_NAME: config.book.repo.name,
+    BOOK_REPO_BRANCH: config.book.repo.branch,
+    // Trailing slashes would double up against the prefix the sync builds.
+    BOOK_REPO_PATH: config.book.repo.path.replace(/\/+$/, ""),
+  };
+  // A private repository needs it; a public one does not. Declared either way so wrangler refuses
+  // to deploy a Worker whose first cron tick would fail on a missing secret.
+  book.secrets = { required: ["GITHUB_TOKEN"] };
+
   if (errorReporter) {
     setCommon(errorReporter, config, config.workers.errorReporter!.name);
   }
 
   return {
-    router, workshop, context, scheduler, customGatekeeper,
+    router, workshop, context, scheduler, customGatekeeper, book,
     ...(errorReporter && { errorReporter }),
   };
 }
@@ -605,6 +634,10 @@ export function buildCommands(config: DeploymentConfig): BuildCommand[] {
     { args: submoduleBuild("@gadgets/gatekeeper-scheduler", "build:app") },
     { args: submoduleBuild("@gadgets/gatekeeper-scheduler") },
     { args: ownBuild("custom-gatekeeper") },
+    // The app bundle first: `book.ts` imports src/generated/app.txt, so the type-check in the
+    // step below fails outright if the bundle has never been written.
+    { args: ownBuild("gatekeeper-book", "build:app") },
+    { args: ownBuild("gatekeeper-book") },
     ...(config.errorReporting.enabled ? [{ args: ownBuild("error-reporter") }] : []),
     // Access mode is a build-time constant in the frontend bundle (`src/useAuth.ts`), so it is set
     // here rather than inherited: a bundle built under a different value is wrong, not just stale.
@@ -720,6 +753,7 @@ async function main(): Promise<void> {
     context: await readJsonc(join(root, packageDirs.context, "wrangler.jsonc")),
     scheduler: await readJsonc(join(root, packageDirs.scheduler, "wrangler.jsonc")),
     customGatekeeper: await readJsonc(join(root, packageDirs.customGatekeeper, "wrangler.jsonc")),
+    book: await readJsonc(join(root, packageDirs.book, "wrangler.jsonc")),
     errorReporter: await readJsonc(join(root, packageDirs.errorReporter, "wrangler.jsonc")),
   });
   reportAiGateway(config);
@@ -740,6 +774,7 @@ async function main(): Promise<void> {
     deployWorker(packageDirs.context, deployArgs);
     deployWorker(packageDirs.scheduler, deployArgs);
     deployWorker(packageDirs.customGatekeeper, deployArgs);
+    deployWorker(packageDirs.book, deployArgs);
     deployWorker(packageDirs.workshop, deployArgs);
     // Last: it binds every one of the above.
     deployWorker(packageDirs.router, deployArgs);
