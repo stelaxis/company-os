@@ -18,6 +18,7 @@ const validConfig: DeploymentConfig = {
     workshop: { name: "acme-cloudflare-os-backend" },
     context: { name: "acme-cloudflare-os-context" },
     scheduler: { name: "acme-cloudflare-os-scheduler" },
+    github: { name: "acme-cloudflare-os-github" },
     customGatekeeper: { name: "acme-cloudflare-os-custom" },
     book: { name: "acme-cloudflare-os-book" },
     errorReporter: { name: "acme-cloudflare-os-errors" },
@@ -78,6 +79,7 @@ async function baseConfigs(): Promise<BaseConfigs> {
     workshop: await baseConfig("../cloudflare-os/packages/workshop-backend/wrangler.jsonc"),
     context: await baseConfig("../cloudflare-os/packages/gatekeeper-context/wrangler.jsonc"),
     scheduler: await baseConfig("../cloudflare-os/packages/gatekeeper-scheduler/wrangler.jsonc"),
+    github: await baseConfig("../cloudflare-os/packages/gatekeeper-github/wrangler.jsonc"),
     customGatekeeper: await baseConfig("../packages/custom-gatekeeper/wrangler.jsonc"),
     book: await baseConfig("../packages/gatekeeper-book/wrangler.jsonc"),
     errorReporter: await baseConfig("../packages/error-reporter/wrangler.jsonc"),
@@ -227,6 +229,11 @@ test("generates Access-mode Workshop, Context, and custom Gatekeeper configs", a
       entrypoint: "GatekeeperVendor",
     },
     {
+      binding: "GATEKEEPER_GITHUB",
+      service: "acme-cloudflare-os-github",
+      entrypoint: "GatekeeperVendor",
+    },
+    {
       binding: "GATEKEEPER_CUSTOM",
       service: "acme-cloudflare-os-custom",
       entrypoint: "GatekeeperVendor",
@@ -278,6 +285,7 @@ test("gives the router the public route, the frontend, and every service binding
     { binding: "WORKSHOP_BACKEND", service: "acme-cloudflare-os-backend" },
     { binding: "GATEKEEPER_CONTEXT", service: "acme-cloudflare-os-context" },
     { binding: "GATEKEEPER_SCHEDULER", service: "acme-cloudflare-os-scheduler" },
+    { binding: "GATEKEEPER_GITHUB", service: "acme-cloudflare-os-github" },
     { binding: "GATEKEEPER_CUSTOM", service: "acme-cloudflare-os-custom" },
     { binding: "GATEKEEPER_BOOK", service: "acme-cloudflare-os-book" },
   ]);
@@ -327,6 +335,62 @@ test("deploys the ambient Scheduler Gatekeeper the hosted flow preinstalls", asy
     .map(({ args }) => args)
     .filter((args) => args.includes("@gadgets/gatekeeper-scheduler"));
   assert.deepEqual(builds.map((args) => args.at(-1)), ["build:app", "build"]);
+});
+
+test("points the GitHub Gatekeeper at the public origin and its OAuth App", async () => {
+  const bases = await baseConfigs();
+  const generated = generateConfigs(validConfig, bases);
+
+  assert.equal(generated.github.name, "acme-cloudflare-os-github");
+  // Its fetch handler throws on any request whose path does not start with BASE_URL's path, and
+  // builds the OAuth callback from it. The committed default is a localhost dev value, so an
+  // unset BASE_URL is not a missing nicety -- it is every forwarded request failing.
+  assert.deepEqual(generated.github.vars, {
+    BASE_URL: "https://os.example.com/gatekeeper/github",
+  });
+  // The GitHub OAuth App's registered callback URL has to be this exact string.
+  assert.equal(`${generated.github.vars!.BASE_URL}/oauth`,
+    "https://os.example.com/gatekeeper/github/oauth");
+  assert.deepEqual(generated.github.secrets, { required: ["CLIENT_ID", "CLIENT_SECRET"] });
+
+  // Reached by both, for the two things this Gatekeeper does: vendor RPC from the backend, and the
+  // OAuth callback, which arrives as a whole HTTP request under /gatekeeper/github.
+  assert.deepEqual(
+    generated.workshop.services!.find((service) => service.binding === "GATEKEEPER_GITHUB"),
+    {
+      binding: "GATEKEEPER_GITHUB",
+      service: "acme-cloudflare-os-github",
+      entrypoint: "GatekeeperVendor",
+    });
+  assert.deepEqual(
+    generated.router.services!.find((service) => service.binding === "GATEKEEPER_GITHUB"),
+    { binding: "GATEKEEPER_GITHUB", service: "acme-cloudflare-os-github" });
+
+  // Verbatim: `UserAccount` is where each user's OAuth grant lives, so a lost migration history is
+  // every connected account disconnected.
+  assert.deepEqual(generated.github.migrations, bases.github.migrations);
+  assert.ok(generated.github.migrations!.length > 0, "github gatekeeper lost its DO migrations");
+
+  // Its UI is a configurator, and its `build` is the type check alone -- `build:configurator` is
+  // what writes the bundle that check reads.
+  const builds = buildCommands(validConfig)
+    .map(({ args }) => args)
+    .filter((args) => args.includes("@gadgets/github-gatekeeper"));
+  assert.deepEqual(builds.map((args) => args.at(-1)), ["build:configurator", "build"]);
+});
+
+test("follows the public origin when the router moves to workers.dev", async () => {
+  // BASE_URL is derived, not configured, so it cannot drift from the origin the router answers on:
+  // a mismatch is a redirect_uri_mismatch at GitHub, or a Gatekeeper that throws on every request.
+  const onWorkersDev = variant((c) => {
+    c.workers.router.route = { workersDev: true };
+    c.publicBaseUrl = "https://acme-cloudflare-os.acme.workers.dev";
+  });
+
+  const generated = generateConfigs(onWorkersDev, await baseConfigs());
+
+  assert.equal(generated.github.vars!.BASE_URL,
+    "https://acme-cloudflare-os.acme.workers.dev/gatekeeper/github");
 });
 
 test("gives the Book Gatekeeper its repository, its secret, and its schedule", async () => {

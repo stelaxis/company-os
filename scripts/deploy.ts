@@ -24,6 +24,7 @@ const packageDirs = {
   workshop: "cloudflare-os/packages/workshop-backend",
   context: "cloudflare-os/packages/gatekeeper-context",
   scheduler: "cloudflare-os/packages/gatekeeper-scheduler",
+  github: "cloudflare-os/packages/gatekeeper-github",
   customGatekeeper: "packages/custom-gatekeeper",
   book: "packages/gatekeeper-book",
   errorReporter: "packages/error-reporter",
@@ -40,6 +41,7 @@ const requiredPaths = [
   "workers.workshop.name",
   "workers.context.name",
   "workers.scheduler.name",
+  "workers.github.name",
   "workers.customGatekeeper.name",
   "workers.book.name",
   "access.issuer",
@@ -441,6 +443,7 @@ export function generateConfigs(config: DeploymentConfig, bases: BaseConfigs): G
   const workshop = structuredClone(bases.workshop);
   const context = structuredClone(bases.context);
   const scheduler = structuredClone(bases.scheduler);
+  const github = structuredClone(bases.github);
   const customGatekeeper = structuredClone(bases.customGatekeeper);
   const book = structuredClone(bases.book);
   const errorReporter = config.errorReporting.enabled
@@ -455,6 +458,9 @@ export function generateConfigs(config: DeploymentConfig, bases: BaseConfigs): G
     // vendor-RPC bindings. The binding name is what picks the /gatekeeper/<name> path.
     { binding: "GATEKEEPER_CONTEXT", service: config.workers.context.name },
     { binding: "GATEKEEPER_SCHEDULER", service: config.workers.scheduler.name },
+    // The GitHub Gatekeeper is the one that genuinely needs this half: its OAuth callback lands on
+    // /gatekeeper/github/oauth, which reaches the Worker only through this binding.
+    { binding: "GATEKEEPER_GITHUB", service: config.workers.github.name },
     { binding: "GATEKEEPER_CUSTOM", service: config.workers.customGatekeeper.name },
     { binding: "GATEKEEPER_BOOK", service: config.workers.book.name },
   ];
@@ -517,6 +523,13 @@ export function generateConfigs(config: DeploymentConfig, bases: BaseConfigs): G
       service: config.workers.scheduler.name,
       entrypoint: "GatekeeperVendor",
     },
+    // No props either: the GitHub Gatekeeper holds one `UserAccount` Durable Object per signed-in
+    // user, keyed by the OAuth grant that user completed, so nothing about it is deployment-scoped.
+    {
+      binding: "GATEKEEPER_GITHUB",
+      service: config.workers.github.name,
+      entrypoint: "GatekeeperVendor",
+    },
     {
       binding: "GATEKEEPER_CUSTOM",
       service: config.workers.customGatekeeper.name,
@@ -560,6 +573,17 @@ export function generateConfigs(config: DeploymentConfig, bases: BaseConfigs): G
   // here without adding a configuration surface for it.
   setCommon(scheduler, config, config.workers.scheduler.name);
 
+  // BASE_URL is not cosmetic: `getBasePath()` derives the OAuth callback and every link the
+  // Gatekeeper serves from it, and its fetch handler throws on any request whose path does not
+  // start with it. The default is a localhost dev value, so leaving it unset breaks every request
+  // the router forwards.
+  setCommon(github, config, config.workers.github.name);
+  github.vars = { BASE_URL: `${origin}/gatekeeper/github` };
+  // Both halves of one GitHub OAuth App, whose callback URL must be `${BASE_URL}/oauth`. Required
+  // rather than optional: without them the Gatekeeper deploys and then answers "Not configured" to
+  // the first user who tries to connect an account.
+  github.secrets = { required: ["CLIENT_ID", "CLIENT_SECRET"] };
+
   setCommon(customGatekeeper, config, config.workers.customGatekeeper.name);
   customGatekeeper.vars = {
     CUSTOM_NAME: config.customGatekeeper.name,
@@ -586,7 +610,7 @@ export function generateConfigs(config: DeploymentConfig, bases: BaseConfigs): G
   }
 
   return {
-    router, workshop, context, scheduler, customGatekeeper, book,
+    router, workshop, context, scheduler, github, customGatekeeper, book,
     ...(errorReporter && { errorReporter }),
   };
 }
@@ -633,6 +657,11 @@ export function buildCommands(config: DeploymentConfig): BuildCommand[] {
     // The Scheduler's `build` nests the same cached `vp run build:app`, so it needs the same pair.
     { args: submoduleBuild("@gadgets/gatekeeper-scheduler", "build:app") },
     { args: submoduleBuild("@gadgets/gatekeeper-scheduler") },
+    // The GitHub Gatekeeper's UI is a configurator rather than a full-page app, and its `build` is
+    // the type check alone. `build:configurator` is what writes the generated bundle `build`
+    // depends on, and running it here uncached is what upstream's own package `deploy` script does.
+    { args: submoduleBuild("@gadgets/github-gatekeeper", "build:configurator") },
+    { args: submoduleBuild("@gadgets/github-gatekeeper") },
     { args: ownBuild("custom-gatekeeper") },
     // The app bundle first: `book.ts` imports src/generated/app.txt, so the type-check in the
     // step below fails outright if the bundle has never been written.
@@ -752,6 +781,7 @@ async function main(): Promise<void> {
     workshop: await readJsonc(join(root, packageDirs.workshop, "wrangler.jsonc")),
     context: await readJsonc(join(root, packageDirs.context, "wrangler.jsonc")),
     scheduler: await readJsonc(join(root, packageDirs.scheduler, "wrangler.jsonc")),
+    github: await readJsonc(join(root, packageDirs.github, "wrangler.jsonc")),
     customGatekeeper: await readJsonc(join(root, packageDirs.customGatekeeper, "wrangler.jsonc")),
     book: await readJsonc(join(root, packageDirs.book, "wrangler.jsonc")),
     errorReporter: await readJsonc(join(root, packageDirs.errorReporter, "wrangler.jsonc")),
@@ -773,6 +803,7 @@ async function main(): Promise<void> {
     }
     deployWorker(packageDirs.context, deployArgs);
     deployWorker(packageDirs.scheduler, deployArgs);
+    deployWorker(packageDirs.github, deployArgs);
     deployWorker(packageDirs.customGatekeeper, deployArgs);
     deployWorker(packageDirs.book, deployArgs);
     deployWorker(packageDirs.workshop, deployArgs);
