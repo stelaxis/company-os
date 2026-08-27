@@ -6,7 +6,7 @@ import { dirname, join, relative, resolve } from "node:path";
 import { parse, printParseErrorCode, type ParseError } from "jsonc-parser";
 import { pnpmCommand } from "../cloudflare-os/scripts/pnpm-command.ts";
 import { resolveBinEntry } from "../cloudflare-os/scripts/bin-entry.ts";
-import { AI_GATEWAY_PROVIDERS } from "./deployment-config.ts";
+import { AI_GATEWAY_PROVIDERS, MCP_PORTAL_AUTH_KINDS } from "./deployment-config.ts";
 import type {
   BaseConfigs,
   BuildCommand,
@@ -28,6 +28,7 @@ const packageDirs = {
   google: "cloudflare-os/packages/gatekeeper-google",
   customGatekeeper: "packages/custom-gatekeeper",
   book: "packages/gatekeeper-book",
+  mcpPortal: "cloudflare-os/packages/gatekeeper-mcp-portal",
   errorReporter: "packages/error-reporter",
 } as const;
 const generatedPaths = Object.fromEntries(
@@ -46,6 +47,7 @@ const requiredPaths = [
   "workers.google.name",
   "workers.customGatekeeper.name",
   "workers.book.name",
+  "workers.mcpPortal.name",
   "access.issuer",
   "access.audience",
   "access.admins",
@@ -58,6 +60,9 @@ const requiredPaths = [
   "book.repo.name",
   "book.repo.branch",
   "book.repo.path",
+  "mcpPortal.url",
+  "mcpPortal.displayName",
+  "mcpPortal.auth",
   "observability.enabled",
   "observability.headSamplingRate",
   "observability.logs.invocationLogs",
@@ -227,8 +232,7 @@ export function validateConfig(config: DeploymentConfig): DeploymentConfig {
     .filter(([key]) => key !== "errorReporter" || config.errorReporting.enabled)
     .map(([, worker]) => worker.name);
   if (new Set(workerNames).size !== workerNames.length) {
-    throw new Error(
-      "Router, Workshop, Context, Scheduler, and custom Gatekeeper names must be unique.");
+    throw new Error("Every workers.*.name must be unique: two Workers share one name.");
   }
   if (!workerNames.every((name) => /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(name))) {
     throw new Error("Worker names must use lowercase letters, numbers, and hyphens.");
@@ -274,6 +278,7 @@ export function validateConfig(config: DeploymentConfig): DeploymentConfig {
   }
 
   validateAiGateway(config);
+  validateMcpPortal(config);
 
   if (typeof config.errorReporting.enabled !== "boolean") {
     throw new Error("Error reporting enabled must be a boolean.");
@@ -402,6 +407,58 @@ function validateAiGateway(config: DeploymentConfig): void {
   }
 }
 
+/**
+ * The deploy-time half of `readPortalConfig()`
+ * (cloudflare-os/packages/gatekeeper-mcp-portal/src/config.ts).
+ *
+ * That function answers an unusable endpoint with `null`, which makes the connector advertise no
+ * resources and the Workshop drop it entirely. That is the right runtime behaviour -- a
+ * misconfiguration hides the connector rather than producing one that fails on first use -- but it
+ * is a silent one: a deployment that meant to offer the portal would ship a Workshop where it
+ * simply is not listed, with nothing in the deploy output saying so. So the same rules are checked
+ * here, where they can name the field that is wrong.
+ */
+function validateMcpPortal(config: DeploymentConfig): void {
+  const portal = config.mcpPortal;
+  if (!MCP_PORTAL_AUTH_KINDS.includes(portal.auth)) {
+    throw new Error(`mcpPortal.auth must be one of ${MCP_PORTAL_AUTH_KINDS.join(", ")}.`);
+  }
+  if (portal.trustAnnotations !== undefined && typeof portal.trustAnnotations !== "boolean") {
+    throw new Error(
+      "mcpPortal.trustAnnotations must be a boolean. Leave it out or false unless every server " +
+      "behind the portal is trusted to write its own auto-approval annotations.");
+  }
+
+  let url: URL;
+  try {
+    url = new URL(portal.url);
+  } catch {
+    throw new Error(
+      "mcpPortal.url must be the portal's MCP endpoint, such as https://mcp.example.com/mcp.");
+  }
+  // `guardedFetch` refuses http:// anyway, and MCP_ALLOW_INSECURE -- the one flag that relaxes it --
+  // is pinned off by `generateConfigs`. A typo here would otherwise hide the connector rather than
+  // fail loudly.
+  if (url.protocol !== "https:") {
+    throw new Error(`mcpPortal.url must be https, not ${url.protocol.replace(":", "")}.`);
+  }
+  // URL userinfo is an ambient credential: fetch and URL APIs copy it into requests, and this
+  // endpoint is persisted on accounts and handed back to configurator frames. Portal auth is
+  // explicit (`auth`, and MCP_PORTAL_TOKEN), so there is nothing a URL credential could mean here.
+  if (url.username || url.password) {
+    throw new Error(
+      "mcpPortal.url must not carry a username or password. Use auth: \"token\" and the " +
+      "MCP_PORTAL_TOKEN secret for a bearer credential.");
+  }
+  // A fragment on a resource URL is the *grant scope* (`#server=github&tool=...`), which the
+  // Gatekeeper mints per binding. One on the endpoint is a copied grant URL, not an endpoint.
+  if (url.hash) {
+    throw new Error(
+      "mcpPortal.url must have no #fragment: a fragment is the per-grant tool scope, which the " +
+      "Gatekeeper adds itself. Configure the bare endpoint.");
+  }
+}
+
 function routeConfig(route: RouterRoute) {
   return route.workersDev
     ? { workers_dev: true, routes: undefined }
@@ -449,6 +506,7 @@ export function generateConfigs(config: DeploymentConfig, bases: BaseConfigs): G
   const google = structuredClone(bases.google);
   const customGatekeeper = structuredClone(bases.customGatekeeper);
   const book = structuredClone(bases.book);
+  const mcpPortal = structuredClone(bases.mcpPortal);
   const errorReporter = config.errorReporting.enabled
     ? structuredClone(bases.errorReporter)
     : undefined;
@@ -470,6 +528,9 @@ export function generateConfigs(config: DeploymentConfig, bases: BaseConfigs): G
     { binding: "GATEKEEPER_GOOGLE", service: config.workers.google.name },
     { binding: "GATEKEEPER_CUSTOM", service: config.workers.customGatekeeper.name },
     { binding: "GATEKEEPER_BOOK", service: config.workers.book.name },
+    // Not decoration: the portal's OAuth redirect lands on /gatekeeper/mcp-portal, which is this
+    // binding name lowercased with underscores turned into hyphens (router/src/index.ts).
+    { binding: "GATEKEEPER_MCP_PORTAL", service: config.workers.mcpPortal.name },
   ];
 
   setCommon(workshop, config, config.workers.workshop.name);
@@ -556,6 +617,13 @@ export function generateConfigs(config: DeploymentConfig, bases: BaseConfigs): G
       service: config.workers.book.name,
       entrypoint: "GatekeeperVendor",
     },
+    // The suffix is also the vendor id the backend derives (buildGatekeeperVendorMap), and the
+    // Gatekeeper hardcodes its own as "mcp_portal", so this binding name is not free to change.
+    {
+      binding: "GATEKEEPER_MCP_PORTAL",
+      service: config.workers.mcpPortal.name,
+      entrypoint: "GatekeeperVendor",
+    },
   ];
   workshop.kv_namespaces = [
     { binding: "BLUEPRINTS", ...(config.resources.blueprintsKvNamespaceId
@@ -630,12 +698,34 @@ export function generateConfigs(config: DeploymentConfig, bases: BaseConfigs): G
   // to deploy a Worker whose first cron tick would fail on a missing secret.
   book.secrets = { required: ["GITHUB_TOKEN"] };
 
+  setCommon(mcpPortal, config, config.workers.mcpPortal.name);
+  mcpPortal.vars = {
+    // Where the portal sends the browser back after authorization. The Gatekeeper has no route of
+    // its own, so this is the router's origin plus the path the GATEKEEPER_MCP_PORTAL binding
+    // routes; its own default (localhost) is for `wrangler dev`.
+    BASE_URL: `${origin}/gatekeeper/mcp-portal`,
+    MCP_PORTAL_URL: config.mcpPortal.url,
+    MCP_PORTAL_NAME: config.mcpPortal.displayName,
+    MCP_PORTAL_AUTH: config.mcpPortal.auth,
+    MCP_PORTAL_TRUST_ANNOTATIONS: String(config.mcpPortal.trustAnnotations ?? false),
+    // Written rather than inherited from the base config. It is the flag that lets the connector
+    // reach http:// and private, loopback, and cloud-metadata hosts -- including every OAuth URL
+    // discovered from the portal, which the far side chooses -- so the deployment states it instead
+    // of tracking whatever an upgraded submodule happens to default to.
+    MCP_ALLOW_INSECURE: "false",
+  };
+  // Only under `auth: "token"`. Declared there so wrangler refuses a Worker that would present no
+  // credential to a portal expecting one; under oauth/none there is no secret to demand.
+  if (config.mcpPortal.auth === "token") {
+    mcpPortal.secrets = { required: ["MCP_PORTAL_TOKEN"] };
+  }
+
   if (errorReporter) {
     setCommon(errorReporter, config, config.workers.errorReporter!.name);
   }
 
   return {
-    router, workshop, context, scheduler, github, google, customGatekeeper, book,
+    router, workshop, context, scheduler, github, google, customGatekeeper, book, mcpPortal,
     ...(errorReporter && { errorReporter }),
   };
 }
@@ -692,6 +782,11 @@ export function buildCommands(config: DeploymentConfig): BuildCommand[] {
     // therefore uncached -- is the same.
     { args: submoduleBuild("@gadgets/google-gatekeeper", "build:configurator") },
     { args: submoduleBuild("@gadgets/google-gatekeeper") },
+    // And the MCP Portal Gatekeeper's grant form. Its `build` is a vp task that dependsOn
+    // `build:configurator`, so naming the codegen explicitly is belt and braces rather than
+    // strictly required -- but it is the same shape as the pairs above, for the same reason.
+    { args: submoduleBuild("@gadgets/mcp-portal-gatekeeper", "build:configurator") },
+    { args: submoduleBuild("@gadgets/mcp-portal-gatekeeper") },
     { args: ownBuild("custom-gatekeeper") },
     // The app bundle first: `book.ts` imports src/generated/app.txt, so the type-check in the
     // step below fails outright if the bundle has never been written.
@@ -815,6 +910,7 @@ async function main(): Promise<void> {
     google: await readJsonc(join(root, packageDirs.google, "wrangler.jsonc")),
     customGatekeeper: await readJsonc(join(root, packageDirs.customGatekeeper, "wrangler.jsonc")),
     book: await readJsonc(join(root, packageDirs.book, "wrangler.jsonc")),
+    mcpPortal: await readJsonc(join(root, packageDirs.mcpPortal, "wrangler.jsonc")),
     errorReporter: await readJsonc(join(root, packageDirs.errorReporter, "wrangler.jsonc")),
   });
   reportAiGateway(config);
@@ -838,6 +934,7 @@ async function main(): Promise<void> {
     deployWorker(packageDirs.google, deployArgs);
     deployWorker(packageDirs.customGatekeeper, deployArgs);
     deployWorker(packageDirs.book, deployArgs);
+    deployWorker(packageDirs.mcpPortal, deployArgs);
     deployWorker(packageDirs.workshop, deployArgs);
     // Last: it binds every one of the above.
     deployWorker(packageDirs.router, deployArgs);

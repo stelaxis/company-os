@@ -86,6 +86,44 @@ export interface BookConfig {
   };
 }
 
+/** How the MCP Portal Gatekeeper authenticates to the portal. */
+export type McpPortalAuth = "oauth" | "none" | "token";
+
+/** Every mode {@link McpPortalAuth} allows, for validation and for error messages. */
+export const MCP_PORTAL_AUTH_KINDS: readonly McpPortalAuth[] = ["oauth", "none", "token"];
+
+/**
+ * The organization's MCP server portal, which the MCP Portal Gatekeeper offers to agents as one
+ * connector covering every upstream server behind it.
+ *
+ * The endpoint is a deployment setting rather than user input: nobody types a URL, and a grant is
+ * always scoped to one server behind the portal. That also makes `url` load-bearing beyond
+ * addressing -- it is the identity accounts, minted bindings, and always-approve decisions are all
+ * keyed on, so changing it after anyone has connected is a repoint that drops their credentials and
+ * makes every user reconnect. See
+ * cloudflare-os/packages/gatekeeper-mcp-portal/README.md#configuration.
+ *
+ * The bearer token is deliberately absent: under `auth: "token"` it is the `MCP_PORTAL_TOKEN`
+ * Wrangler secret, never a tracked configuration value.
+ */
+export interface McpPortalConfig {
+  /**
+   * The portal's Streamable HTTP MCP endpoint, such as `https://mcp.example.com/mcp`. HTTPS, with
+   * no embedded credentials and no `#fragment` -- a fragment is the grant scope, not the endpoint.
+   */
+  url: string;
+  /** Connector name, shown in the connector list and in every approval prompt. */
+  displayName: string;
+  /** How the Gatekeeper authenticates. `"token"` additionally needs the `MCP_PORTAL_TOKEN` secret. */
+  auth: McpPortalAuth;
+  /**
+   * Whether tool annotations from behind the portal may drive auto-approval. Omitted or false keeps
+   * every write behind an approval prompt: a portal relays annotations written by whichever
+   * upstream server it fronts, not by the administrator who chose the portal.
+   */
+  trustAnnotations?: boolean;
+}
+
 /** Context Gatekeeper storage and the sharing boundary its data is scoped to. */
 export interface ContextConfig {
   /**
@@ -145,6 +183,8 @@ export interface DeploymentConfig {
     customGatekeeper: { name: string };
     /** The Book Gatekeeper, which mirrors a Git directory and serves it read-only. */
     book: { name: string };
+    /** The MCP Portal Gatekeeper, which fronts the organization's MCP server portal. */
+    mcpPortal: { name: string };
     /** Only required when `errorReporting.enabled`. */
     errorReporter?: { name: string };
   };
@@ -154,6 +194,8 @@ export interface DeploymentConfig {
   /** Display text the example custom Gatekeeper serves to agents. */
   customGatekeeper: { name: string; message: string };
   book: BookConfig;
+  /** The organization's MCP server portal, reached through the MCP Portal Gatekeeper. */
+  mcpPortal: McpPortalConfig;
   /** Private explicit-issue destination. */
   errorReporting: { enabled: boolean; environment?: string; release?: string | null };
   /** Workshop KV/R2. `null` requests Wrangler automatic provisioning. */
@@ -221,6 +263,7 @@ export interface GeneratedConfigs {
   google: ProdWranglerConfig;
   customGatekeeper: ProdWranglerConfig;
   book: ProdWranglerConfig;
+  mcpPortal: ProdWranglerConfig;
   /** Absent when `errorReporting.enabled` is false. */
   errorReporter?: ProdWranglerConfig;
 }
@@ -235,6 +278,7 @@ export interface BaseConfigs {
   google: ProdWranglerConfig;
   customGatekeeper: ProdWranglerConfig;
   book: ProdWranglerConfig;
+  mcpPortal: ProdWranglerConfig;
   errorReporter: ProdWranglerConfig;
 }
 

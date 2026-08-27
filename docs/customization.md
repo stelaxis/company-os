@@ -32,6 +32,8 @@ The custom logo appears in the app chrome, sign-in screens, and browser tab on e
 | `access` | Cloudflare Access trust and administrator list | Access team issuer, application audience, and verified email list |
 | `aiGateway` | Deployment-managed model catalog | Enabled by default over the Workers AI binding; which providers to advertise, and which gateway |
 | `context` | Context sharing boundary, snapshot KV, and optional Artifacts repositories | `null` to scope data to the public origin, or a pinned stable label; automatic or existing KV; Git-backed collections disabled or enabled |
+| `book` | The Git directory the Book Gatekeeper mirrors read-only | Repository owner, name, branch, and directory prefix; the credential is the `GITHUB_TOKEN` secret |
+| `mcpPortal` | The organization's MCP server portal | Portal endpoint, connector name, authentication mode, and whether upstream annotations may auto-approve |
 | `customGatekeeper` | Example integration identity and guidance | Organization-specific display text |
 | `errorReporting` | Private explicit-issue destination | Console Reporter enabled state, environment, and release metadata |
 | `resources` | Blueprint/avatar KV and blueprint-content R2 | `null` to provision or explicit IDs/names to reuse |
@@ -41,7 +43,7 @@ Secrets are never valid values in this file. Install them interactively with Wra
 
 ### Workers and routing
 
-The deployment is nine Workers. Keep their names unique: service bindings use these names, so update and deploy them together.
+The deployment is ten Workers. Keep their names unique: service bindings use these names, so update and deploy them together.
 
 | Worker | Role |
 | --- | --- |
@@ -53,11 +55,12 @@ The deployment is nine Workers. Keep their names unique: service bindings use th
 | `google` | The Google Gatekeeper: Gmail, Docs, Sheets, Calendar, and BigQuery; see [Google](#google) below. |
 | `customGatekeeper` | This repository's example integration. |
 | `book` | The Book Gatekeeper, which mirrors a Git directory read-only on a cron. |
+| `mcpPortal` | The [MCP Portal Gatekeeper](#mcp-server-portal), which fronts the organization's MCP server portal. |
 | `errorReporter` | The private explicit-issue destination. |
 
 Context and Scheduler are *ambient*: upstream's release marks both `PREINSTALL`, so the hosted flow installs them on every instance and this starter deploys them for the same reason. Neither takes configuration beyond its name — the Scheduler takes none at all.
 
-Only the router takes a route; the other eight are reachable only over service bindings, and the deploy turns off `workers.dev` and [Preview URLs](https://developers.cloudflare.com/workers/configuration/previews/) on all nine. That keeps the router the single Access-protected way in.
+Only the router takes a route; the other nine are reachable only over service bindings, and the deploy turns off `workers.dev` and [Preview URLs](https://developers.cloudflare.com/workers/configuration/previews/) on all ten. That keeps the router the single Access-protected way in.
 
 For production, set a [Custom Domain](https://developers.cloudflare.com/workers/configuration/routing/custom-domains/) on it:
 
@@ -158,6 +161,35 @@ CLOUDFLARE_ACCOUNT_ID=your-account-id pnpm exec wrangler secret put CLIENT_SECRE
 Both are declared [required](https://developers.cloudflare.com/workers/configuration/secrets/#validate-secrets-before-deploy) in the generated Wrangler config, so a deployment missing either is refused at deploy time rather than discovered by the first user who tries to connect an account. Install them *before* the first deploy that includes this Worker, including the one CI runs on a push to `main`: on an account where the Worker does not exist yet, `wrangler secret put` offers to create a draft Worker of that name to hold them, which the deploy then overwrites.
 
 Sign-in is untouched by any of this. This deployment authenticates with Cloudflare Access; "Continue with Google" is a separate upstream feature gated on the `AUTH_GATEKEEPERS` allowlist, which the starter does not set. See [Sign-in methods](#sign-in-methods).
+
+### MCP server portal
+
+The [MCP Portal Gatekeeper](https://github.com/cloudflare/cloudflare-os/blob/main/packages/gatekeeper-mcp-portal/README.md) turns the organization's [MCP server portal](https://developers.cloudflare.com/cloudflare-one/access-controls/ai-controls/mcp-portals/) into one connector covering every upstream server behind it. Access decides who may connect, Gateway logs and inspects what crosses, and agents never see an endpoint: the URL is a deployment setting, and there is no connect form.
+
+```jsonc
+"mcpPortal": {
+  "url": "https://mcp.example.com/mcp",
+  "displayName": "Acme MCP Portal",
+  "auth": "oauth",
+  "trustAnnotations": false
+}
+```
+
+Each grant names exactly one server behind the portal, at "all tools" or a chosen subset — there is no grant that spans the portal, since that would hand a Gadget every tool of every system the organization has connected, including ones added later. Read-only tools answer straight away and are recorded as observations; everything else queues for approval.
+
+Four things are worth deciding deliberately:
+
+- **`url` is an identity, not just an address.** Accounts, minted bindings, and always-approve decisions are all keyed on it, query string included. Changing it after anyone has connected is a *repoint*: existing bindings fail closed immediately, tokens and transport sessions are dropped, and every user has to reconnect.
+- **Code Mode has to be off or opt-in.** The connector needs the portal to expose its upstream tools directly. Cloudflare's default policy is opt-in, which works as written; on a portal whose policy is default-on, append `?codemode=off` — and note that doing so later is the repoint above. Enforced Code Mode is unsupported.
+- **`auth`.** `oauth` sends users through the portal's own Access sign-in and is the normal choice. `token` presents a deployment-held bearer instead, which the deploy then [declares as required](https://developers.cloudflare.com/workers/configuration/secrets/#validate-secrets-before-deploy):
+
+  ```sh
+  pnpm exec wrangler secret put MCP_PORTAL_TOKEN --name your-mcp-portal-worker
+  ```
+
+- **`trustAnnotations` is an assertion about the upstreams, not about the portal.** Setting it true lets a tool its upstream server marks non-destructive and idempotent be applied without an approval prompt, once a user enables a rule for that action kind. A portal is an aggregator, so `destructiveHint` and `idempotentHint` are written by whichever server it fronts rather than by the administrator who chose the portal — which is why it is false by default, and why adding a third-party server to a portal is a reason to revisit it. The flag is read at each point of use and never persisted, so clearing it de-escalates every existing connection on its next call, and setting it auto-approves nothing retroactively.
+
+The OAuth redirect comes back through the router at `/gatekeeper/mcp-portal`, which is why the Worker is bound as `GATEKEEPER_MCP_PORTAL` on both the router and the Workshop. That binding name is also the vendor id the backend derives, and the Gatekeeper hardcodes its own, so it is not free to change.
 
 ### Storage
 

@@ -22,6 +22,7 @@ const validConfig: DeploymentConfig = {
     google: { name: "acme-cloudflare-os-google" },
     customGatekeeper: { name: "acme-cloudflare-os-custom" },
     book: { name: "acme-cloudflare-os-book" },
+    mcpPortal: { name: "acme-cloudflare-os-mcp-portal" },
     errorReporter: { name: "acme-cloudflare-os-errors" },
   },
   access: {
@@ -44,6 +45,12 @@ const validConfig: DeploymentConfig = {
   book: {
     displayName: "Acme Book",
     repo: { owner: "acme", name: "acme", branch: "main", path: "docs/book" },
+  },
+  mcpPortal: {
+    url: "https://mcp.example.com/mcp",
+    displayName: "Acme MCP Portal",
+    auth: "oauth",
+    trustAnnotations: false,
   },
   errorReporting: { enabled: true, environment: "production", release: "abc123" },
   resources: {
@@ -84,6 +91,8 @@ async function baseConfigs(): Promise<BaseConfigs> {
     google: await baseConfig("../cloudflare-os/packages/gatekeeper-google/wrangler.jsonc"),
     customGatekeeper: await baseConfig("../packages/custom-gatekeeper/wrangler.jsonc"),
     book: await baseConfig("../packages/gatekeeper-book/wrangler.jsonc"),
+    mcpPortal: await baseConfig(
+      "../cloudflare-os/packages/gatekeeper-mcp-portal/wrangler.jsonc"),
     errorReporter: await baseConfig("../packages/error-reporter/wrangler.jsonc"),
   };
 }
@@ -250,6 +259,11 @@ test("generates Access-mode Workshop, Context, and custom Gatekeeper configs", a
       service: "acme-cloudflare-os-book",
       entrypoint: "GatekeeperVendor",
     },
+    {
+      binding: "GATEKEEPER_MCP_PORTAL",
+      service: "acme-cloudflare-os-mcp-portal",
+      entrypoint: "GatekeeperVendor",
+    },
   ]);
   assert.deepEqual(generated.workshop.kv_namespaces, [
     { binding: "BLUEPRINTS", id: "blueprints-kv-id" },
@@ -296,6 +310,7 @@ test("gives the router the public route, the frontend, and every service binding
     { binding: "GATEKEEPER_GOOGLE", service: "acme-cloudflare-os-google" },
     { binding: "GATEKEEPER_CUSTOM", service: "acme-cloudflare-os-custom" },
     { binding: "GATEKEEPER_BOOK", service: "acme-cloudflare-os-book" },
+    { binding: "GATEKEEPER_MCP_PORTAL", service: "acme-cloudflare-os-mcp-portal" },
   ]);
   // Inherited untouched: the base config already carries the ASSETS binding, the SPA fallback, and
   // the /gatekeeper/* prefix an OAuth Gatekeeper redirect needs.
@@ -470,6 +485,127 @@ test("gives the Google Gatekeeper one OAuth client and the base URL it redirects
     .map(({ args }) => args)
     .filter((args) => args.includes("@gadgets/google-gatekeeper"));
   assert.deepEqual(builds.map((args) => args.at(-1)), ["build:configurator", "build"]);
+});
+
+test("points the MCP Portal Gatekeeper at the organization's portal", async () => {
+  const bases = await baseConfigs();
+  const generated = generateConfigs(validConfig, bases);
+
+  assert.equal(generated.mcpPortal.name, "acme-cloudflare-os-mcp-portal");
+  assert.deepEqual(generated.mcpPortal.vars, {
+    // The Gatekeeper has no route of its own, so the portal's OAuth redirect has to come back
+    // through the router, on the path the GATEKEEPER_MCP_PORTAL binding serves.
+    BASE_URL: "https://os.example.com/gatekeeper/mcp-portal",
+    MCP_PORTAL_URL: "https://mcp.example.com/mcp",
+    MCP_PORTAL_NAME: "Acme MCP Portal",
+    MCP_PORTAL_AUTH: "oauth",
+    MCP_PORTAL_TRUST_ANNOTATIONS: "false",
+    MCP_ALLOW_INSECURE: "false",
+  });
+  // Under oauth there is no deployment-held credential to demand.
+  assert.equal(generated.mcpPortal.secrets, undefined);
+
+  // Those Durable Objects hold each user's portal credentials and transport session, so their
+  // migration history has to arrive verbatim.
+  assert.deepEqual(generated.mcpPortal.migrations, bases.mcpPortal.migrations);
+  assert.ok(generated.mcpPortal.migrations!.length > 0, "mcp-portal lost its DO migrations");
+  // OAuth discovery follows a WWW-Authenticate header and then an issuer, both chosen by the far
+  // side. This flag is what makes workerd refuse reserved IP ranges *after* DNS resolution, which
+  // no hostname check can do -- so it survives generation.
+  assert.ok(generated.mcpPortal.compatibility_flags!.includes("global_fetch_strictly_public"),
+    JSON.stringify(generated.mcpPortal.compatibility_flags));
+
+  const builds = buildCommands(validConfig)
+    .map(({ args }) => args)
+    .filter((args) => args.includes("@gadgets/mcp-portal-gatekeeper"));
+  assert.deepEqual(builds.map((args) => args.at(-1)), ["build:configurator", "build"]);
+});
+
+test("derives the portal redirect from a workersDev origin too", async () => {
+  const onWorkersDev = variant((c) => {
+    c.workers.router.route = { workersDev: true };
+    c.publicBaseUrl = "https://acme-cloudflare-os.acme.workers.dev";
+  });
+
+  const generated = generateConfigs(onWorkersDev, await baseConfigs());
+
+  assert.equal(generated.mcpPortal.vars!.BASE_URL,
+    "https://acme-cloudflare-os.acme.workers.dev/gatekeeper/mcp-portal");
+});
+
+test("demands the portal bearer secret only under token auth", async () => {
+  const bases = await baseConfigs();
+
+  const token = generateConfigs(
+    variant((c) => { c.mcpPortal.auth = "token"; }), bases);
+  assert.equal(token.mcpPortal.vars!.MCP_PORTAL_AUTH, "token");
+  // Declared so wrangler refuses a Worker that would present no credential to a portal expecting
+  // one -- the same reason the Book declares GITHUB_TOKEN.
+  assert.deepEqual(token.mcpPortal.secrets, { required: ["MCP_PORTAL_TOKEN"] });
+
+  const anonymous = generateConfigs(
+    variant((c) => { c.mcpPortal.auth = "none"; }), bases);
+  assert.equal(anonymous.mcpPortal.secrets, undefined);
+});
+
+test("carries an explicit annotation-trust decision to the Worker", async () => {
+  const bases = await baseConfigs();
+
+  // Omitted is the same as false: a portal relays annotations its administrator never reviewed.
+  const omitted = generateConfigs(
+    variant((c) => { delete c.mcpPortal.trustAnnotations; }), bases);
+  assert.equal(omitted.mcpPortal.vars!.MCP_PORTAL_TRUST_ANNOTATIONS, "false");
+
+  const trusted = generateConfigs(
+    variant((c) => { c.mcpPortal.trustAnnotations = true; }), bases);
+  assert.equal(trusted.mcpPortal.vars!.MCP_PORTAL_TRUST_ANNOTATIONS, "true");
+});
+
+/**
+ * Every case here is one `readPortalConfig()` answers with null, which hides the connector instead
+ * of failing: the Workshop would simply not list it, and nothing in the deploy output would say
+ * why. Catching them at check time is the whole point of duplicating its rules.
+ */
+test("rejects a portal endpoint the Gatekeeper would silently refuse", () => {
+  assert.throws(
+    () => validateConfig(variant((c) => { c.mcpPortal.url = "http://mcp.example.com/mcp"; })),
+    /mcpPortal.url must be https/i);
+
+  assert.throws(
+    () => validateConfig(variant((c) => { c.mcpPortal.url = "mcp.example.com/mcp"; })),
+    /mcpPortal.url must be the portal's MCP endpoint/i);
+
+  // URL userinfo is an ambient credential, and this endpoint is persisted on accounts and handed
+  // back to configurator frames.
+  assert.throws(
+    () => validateConfig(variant((c) => {
+      c.mcpPortal.url = "https://user:secret@mcp.example.com/mcp";
+    })),
+    /must not carry a username or password/i);
+
+  // A fragment on a resource URL is the per-grant tool scope, which the Gatekeeper mints itself.
+  assert.throws(
+    () => validateConfig(variant((c) => {
+      c.mcpPortal.url = "https://mcp.example.com/mcp#server=github";
+    })),
+    /no #fragment/i);
+
+  assert.throws(
+    () => validateConfig(variant((c) => { c.mcpPortal.auth = "bearer"; })),
+    /mcpPortal.auth must be one of oauth, none, token/i);
+
+  assert.throws(
+    () => validateConfig(variant((c) => { c.mcpPortal.trustAnnotations = "true"; })),
+    /trustAnnotations must be a boolean/i);
+
+  assert.throws(
+    () => validateConfig(variant((c) => { delete c.mcpPortal.url; })),
+    /Missing required deployment value: mcpPortal.url/);
+
+  // A query string is legitimate -- "?codemode=off" is how a default-on portal is made to expose
+  // its upstream tools directly -- so it stays valid, and stays part of the endpoint identity.
+  const withQuery = variant((c) => { c.mcpPortal.url = "https://mcp.example.com/mcp?codemode=off"; });
+  assert.equal(validateConfig(withQuery).mcpPortal.url, "https://mcp.example.com/mcp?codemode=off");
 });
 
 test("keeps every Worker behind the router off the public internet", async () => {

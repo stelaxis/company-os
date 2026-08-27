@@ -54,6 +54,10 @@
 
     // The Book Gatekeeper, which mirrors a Git directory read-only on a cron.
     "book": { "name": "stelaxis-os-book" },
+
+    // The MCP Portal Gatekeeper, which fronts the organization's MCP server portal.
+    "mcpPortal": { "name": "stelaxis-os-mcp-portal" },
+
     "errorReporter": { "name": "stelaxis-os-error-reporter" }
   },
 
@@ -119,6 +123,44 @@
       "branch": "main",
       "path": "docs/book"
     }
+  },
+
+  // The organization's Cloudflare MCP server portal, offered to agents as one connector covering
+  // every upstream server behind it. Cloudflare Access decides who may connect and Gateway logs
+  // what crosses; a grant always names one server behind the portal, never the portal as a whole.
+  //
+  // "url" is the identity everything is keyed on -- accounts, minted bindings, and always-approve
+  // decisions -- so changing it after anyone has connected drops their credentials and makes every
+  // user reconnect. Get it right the first time, query string included.
+  //
+  // The connector needs the portal to expose its upstream tools directly. Cloudflare's default
+  // Code Mode policy is opt-in, which is compatible as written; if this portal's policy is
+  // default-on, the URL has to become ".../mcp?codemode=off" -- and because the query string is
+  // part of the endpoint identity, that later edit is the repoint described above.
+  //
+  // Under "auth": "token" the bearer is a Wrangler secret, never a value in this file:
+  //   pnpm exec wrangler secret put MCP_PORTAL_TOKEN --name stelaxis-os-mcp-portal
+  // Reference: cloudflare-os/packages/gatekeeper-mcp-portal/README.md
+  "mcpPortal": {
+    "url": "https://mcp.stelaxis.org/mcp",
+    "displayName": "Stelaxis MCP Portal",
+
+    // "oauth" sends users through the portal's own Cloudflare Access sign-in. "none" connects
+    // unauthenticated; "token" presents the MCP_PORTAL_TOKEN secret.
+    "auth": "oauth",
+
+    // Lets tool annotations from behind the portal drive auto-approval: a tool its upstream server
+    // marks non-destructive and idempotent can then be applied without an approval prompt, once a
+    // user enables a rule for that action kind. Setting it retroactively auto-approves nothing.
+    //
+    // This is an assertion about the upstream servers, not about the portal in front of them -- a
+    // portal is an aggregator, so those hints are written by whichever server it fronts rather than
+    // by the administrator who chose the portal. True here says this deployment trusts the servers
+    // behind the Stelaxis portal; adding a third-party server to it is a reason to revisit that.
+    //
+    // Read at each point of use and never persisted on an account, so setting it back to false
+    // de-escalates every existing connection on its next call.
+    "trustAnnotations": true
   },
 
   // Displayed to agents when the example custom integration is enabled in /admin.
