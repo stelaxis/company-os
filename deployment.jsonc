@@ -32,6 +32,14 @@
     // the Context Gatekeeper
     "scheduler": { "name": "stelaxis-os-scheduler" },
 
+    // The GitHub Gatekeeper. Each user connects their own GitHub account through it, so it holds no
+    // deployment-wide credential -- only the OAuth App's client id and secret, installed as
+    // Wrangler secrets:
+    //   pnpm exec wrangler secret put CLIENT_ID --name stelaxis-os-github
+    //   pnpm exec wrangler secret put CLIENT_SECRET --name stelaxis-os-github
+    // The OAuth App's callback URL must be <publicBaseUrl>/gatekeeper/github/oauth.
+    "github": { "name": "stelaxis-os-github" },
+
     "customGatekeeper": { "name": "stelaxis-os-gatekeeper" },
 
     // The Book Gatekeeper, which mirrors a Git directory read-only on a cron.

@@ -41,7 +41,7 @@ Secrets are never valid values in this file. Install them interactively with Wra
 
 ### Workers and routing
 
-The deployment is six Workers. Keep their names unique: service bindings use these names, so update and deploy them together.
+The deployment is eight Workers. Keep their names unique: service bindings use these names, so update and deploy them together.
 
 | Worker | Role |
 | --- | --- |
@@ -49,12 +49,14 @@ The deployment is six Workers. Keep their names unique: service bindings use the
 | `workshop` | The Cloudflare OS backend, holding all user data in Durable Objects. |
 | `context` | The Context Gatekeeper. |
 | `scheduler` | The Scheduler Gatekeeper, which gives agents scheduled and recurring work. |
+| `github` | The GitHub Gatekeeper. Each user connects their own account through it; see [GitHub](#github) below. |
 | `customGatekeeper` | This repository's example integration. |
+| `book` | The Book Gatekeeper, which mirrors a Git directory read-only on a cron. |
 | `errorReporter` | The private explicit-issue destination. |
 
 Context and Scheduler are *ambient*: upstream's release marks both `PREINSTALL`, so the hosted flow installs them on every instance and this starter deploys them for the same reason. Neither takes configuration beyond its name — the Scheduler takes none at all.
 
-Only the router takes a route; the other five are reachable only over service bindings, and the deploy turns off `workers.dev` and [Preview URLs](https://developers.cloudflare.com/workers/configuration/previews/) on all six. That keeps the router the single Access-protected way in.
+Only the router takes a route; the other seven are reachable only over service bindings, and the deploy turns off `workers.dev` and [Preview URLs](https://developers.cloudflare.com/workers/configuration/previews/) on all eight. That keeps the router the single Access-protected way in.
 
 For production, set a [Custom Domain](https://developers.cloudflare.com/workers/configuration/routing/custom-domains/) on it:
 
@@ -98,6 +100,27 @@ Create a [self-hosted Access application](https://developers.cloudflare.com/clou
 - `admins`: Access-verified email addresses allowed into `/admin`.
 
 Access policies decide who can sign in. The `admins` list decides which signed-in identities can change runtime policy. Keep both narrow.
+
+### GitHub
+
+The GitHub Gatekeeper is upstream's, deployed from the submodule. It is per-user, not per-deployment: each signed-in user authorizes their own GitHub account from the Connections tab, and a connection is scoped to one repository, issue, or pull request. Agents then read repository metadata, issues, pull requests, diffs, and review threads, and can write — create issues and pull requests, comment, label, close, review, merge — through the usual approval path. There is no file-tree or commit-log read; commit shas appear only inside a pull request's revision. Mirroring repository *files* is the Book Gatekeeper's job.
+
+Register a GitHub [**OAuth App**](https://github.com/settings/developers), not a GitHub App. Only OAuth Apps honor the OAuth `scope` parameter, which is what keeps sign-in to `read:user user:email` while a connection asks for `repo`; a GitHub App ignores `scope` and fails the email lookup with `Resource not accessible by integration`. Its Authorization callback URL must be the deployment's own:
+
+```
+<publicBaseUrl>/gatekeeper/github/oauth
+```
+
+`scripts/deploy.ts` derives the Worker's `BASE_URL` from the public origin, so the callback follows a hostname change rather than drifting from it. The credentials are Wrangler secrets, declared `required` so a deploy that would answer "Not configured" to the first user is refused instead:
+
+```sh
+CLOUDFLARE_ACCOUNT_ID=your-account-id pnpm exec wrangler secret put CLIENT_ID --name your-github-worker
+CLOUDFLARE_ACCOUNT_ID=your-account-id pnpm exec wrangler secret put CLIENT_SECRET --name your-github-worker
+```
+
+A connection is scoped by the Gatekeeper, not by GitHub: the OAuth grant carries the `repo` scope, so the stored token can reach every private repository its owner can, whatever single resource the connection names. A user unwilling to give this deployment that much reach should not connect their account to it.
+
+Sign-in is a separate question. This starter runs Cloudflare Access, so the Gatekeeper's `providesAuth` half is unused; adding `github` to upstream's `AUTH_GATEKEEPERS` only matters under the other [sign-in methods](#sign-in-methods).
 
 ### Storage
 

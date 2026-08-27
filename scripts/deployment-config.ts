@@ -130,6 +130,11 @@ export interface DeploymentConfig {
     workshop: { name: string };
     context: { name: string };
     scheduler: { name: string };
+    /**
+     * The GitHub Gatekeeper. Its credentials are one OAuth App's `CLIENT_ID`/`CLIENT_SECRET`,
+     * Wrangler secrets rather than tracked values, so the Worker name is all this file carries.
+     */
+    github: { name: string };
     customGatekeeper: { name: string };
     /** The Book Gatekeeper, which mirrors a Git directory and serves it read-only. */
     book: { name: string };
@@ -205,6 +210,7 @@ export interface GeneratedConfigs {
   workshop: ProdWranglerConfig;
   context: ProdWranglerConfig;
   scheduler: ProdWranglerConfig;
+  github: ProdWranglerConfig;
   customGatekeeper: ProdWranglerConfig;
   book: ProdWranglerConfig;
   /** Absent when `errorReporting.enabled` is false. */
@@ -217,6 +223,7 @@ export interface BaseConfigs {
   workshop: ProdWranglerConfig;
   context: ProdWranglerConfig;
   scheduler: ProdWranglerConfig;
+  github: ProdWranglerConfig;
   customGatekeeper: ProdWranglerConfig;
   book: ProdWranglerConfig;
   errorReporter: ProdWranglerConfig;
