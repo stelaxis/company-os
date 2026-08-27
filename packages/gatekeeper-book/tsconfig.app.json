@@ -1,0 +1,12 @@
+{
+  "extends": "../../cloudflare-os/tsconfig.json",
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ESNext", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "types": [],
+    "noEmit": true
+  },
+  "include": ["app", "src/ui-api.ts", "src/types.d.ts"]
+}

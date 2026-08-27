@@ -67,6 +67,25 @@ export interface AiGatewayConfigInput {
   workersAi?: never;
 }
 
+/**
+ * The Git directory the Book Gatekeeper mirrors.
+ *
+ * The token is deliberately absent: it is a Wrangler secret (`GITHUB_TOKEN`), never a tracked
+ * configuration value. A private repository without it fails at sync time, not at deploy time.
+ */
+export interface BookConfig {
+  /** Shown as the vendor and account name in the Workshop. */
+  displayName: string;
+  repo: {
+    owner: string;
+    name: string;
+    /** Branch to mirror. */
+    branch: string;
+    /** Directory prefix within the repository, no trailing slash. */
+    path: string;
+  };
+}
+
 /** Context Gatekeeper storage and the sharing boundary its data is scoped to. */
 export interface ContextConfig {
   /**
@@ -112,6 +131,8 @@ export interface DeploymentConfig {
     context: { name: string };
     scheduler: { name: string };
     customGatekeeper: { name: string };
+    /** The Book Gatekeeper, which mirrors a Git directory and serves it read-only. */
+    book: { name: string };
     /** Only required when `errorReporting.enabled`. */
     errorReporter?: { name: string };
   };
@@ -120,6 +141,7 @@ export interface DeploymentConfig {
   context: ContextConfig;
   /** Display text the example custom Gatekeeper serves to agents. */
   customGatekeeper: { name: string; message: string };
+  book: BookConfig;
   /** Private explicit-issue destination. */
   errorReporting: { enabled: boolean; environment?: string; release?: string | null };
   /** Workshop KV/R2. `null` requests Wrangler automatic provisioning. */
@@ -173,6 +195,8 @@ export type ProdWranglerConfig =
     secrets?: { required: string[] };
     /** Artifacts namespaces. An array, unlike upstream's single-binding declaration. */
     artifacts?: { binding: string; namespace: string }[];
+    /** Cron schedules. Upstream declares no triggers; the Book Gatekeeper is the only user. */
+    triggers?: { crons?: string[] };
   };
 
 /** The generated configs, keyed as `deployment.jsonc` keys them. */
@@ -182,6 +206,7 @@ export interface GeneratedConfigs {
   context: ProdWranglerConfig;
   scheduler: ProdWranglerConfig;
   customGatekeeper: ProdWranglerConfig;
+  book: ProdWranglerConfig;
   /** Absent when `errorReporting.enabled` is false. */
   errorReporter?: ProdWranglerConfig;
 }
@@ -193,6 +218,7 @@ export interface BaseConfigs {
   context: ProdWranglerConfig;
   scheduler: ProdWranglerConfig;
   customGatekeeper: ProdWranglerConfig;
+  book: ProdWranglerConfig;
   errorReporter: ProdWranglerConfig;
 }
 
