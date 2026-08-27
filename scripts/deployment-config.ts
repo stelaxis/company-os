@@ -135,6 +135,13 @@ export interface DeploymentConfig {
      * Wrangler secrets rather than tracked values, so the Worker name is all this file carries.
      */
     github: { name: string };
+    /**
+     * The upstream Google Gatekeeper: Gmail, Docs, Sheets, Calendar, and BigQuery, all five behind
+     * one deployment-wide OAuth client whose id and secret are Wrangler secrets rather than tracked
+     * values. It has no configuration of its own beyond this name -- the base URL it serves and
+     * redirects under is derived from the deployment's public origin.
+     */
+    google: { name: string };
     customGatekeeper: { name: string };
     /** The Book Gatekeeper, which mirrors a Git directory and serves it read-only. */
     book: { name: string };
@@ -211,6 +218,7 @@ export interface GeneratedConfigs {
   context: ProdWranglerConfig;
   scheduler: ProdWranglerConfig;
   github: ProdWranglerConfig;
+  google: ProdWranglerConfig;
   customGatekeeper: ProdWranglerConfig;
   book: ProdWranglerConfig;
   /** Absent when `errorReporting.enabled` is false. */
@@ -224,6 +232,7 @@ export interface BaseConfigs {
   context: ProdWranglerConfig;
   scheduler: ProdWranglerConfig;
   github: ProdWranglerConfig;
+  google: ProdWranglerConfig;
   customGatekeeper: ProdWranglerConfig;
   book: ProdWranglerConfig;
   errorReporter: ProdWranglerConfig;

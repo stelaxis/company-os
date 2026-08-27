@@ -19,6 +19,7 @@ const validConfig: DeploymentConfig = {
     context: { name: "acme-cloudflare-os-context" },
     scheduler: { name: "acme-cloudflare-os-scheduler" },
     github: { name: "acme-cloudflare-os-github" },
+    google: { name: "acme-cloudflare-os-google" },
     customGatekeeper: { name: "acme-cloudflare-os-custom" },
     book: { name: "acme-cloudflare-os-book" },
     errorReporter: { name: "acme-cloudflare-os-errors" },
@@ -80,6 +81,7 @@ async function baseConfigs(): Promise<BaseConfigs> {
     context: await baseConfig("../cloudflare-os/packages/gatekeeper-context/wrangler.jsonc"),
     scheduler: await baseConfig("../cloudflare-os/packages/gatekeeper-scheduler/wrangler.jsonc"),
     github: await baseConfig("../cloudflare-os/packages/gatekeeper-github/wrangler.jsonc"),
+    google: await baseConfig("../cloudflare-os/packages/gatekeeper-google/wrangler.jsonc"),
     customGatekeeper: await baseConfig("../packages/custom-gatekeeper/wrangler.jsonc"),
     book: await baseConfig("../packages/gatekeeper-book/wrangler.jsonc"),
     errorReporter: await baseConfig("../packages/error-reporter/wrangler.jsonc"),
@@ -234,6 +236,11 @@ test("generates Access-mode Workshop, Context, and custom Gatekeeper configs", a
       entrypoint: "GatekeeperVendor",
     },
     {
+      binding: "GATEKEEPER_GOOGLE",
+      service: "acme-cloudflare-os-google",
+      entrypoint: "GatekeeperVendor",
+    },
+    {
       binding: "GATEKEEPER_CUSTOM",
       service: "acme-cloudflare-os-custom",
       entrypoint: "GatekeeperVendor",
@@ -286,6 +293,7 @@ test("gives the router the public route, the frontend, and every service binding
     { binding: "GATEKEEPER_CONTEXT", service: "acme-cloudflare-os-context" },
     { binding: "GATEKEEPER_SCHEDULER", service: "acme-cloudflare-os-scheduler" },
     { binding: "GATEKEEPER_GITHUB", service: "acme-cloudflare-os-github" },
+    { binding: "GATEKEEPER_GOOGLE", service: "acme-cloudflare-os-google" },
     { binding: "GATEKEEPER_CUSTOM", service: "acme-cloudflare-os-custom" },
     { binding: "GATEKEEPER_BOOK", service: "acme-cloudflare-os-book" },
   ]);
@@ -420,6 +428,50 @@ test("trims a trailing slash from the mirrored path", async () => {
   assert.equal(generated.book.vars!.BOOK_REPO_PATH, "docs/book");
 });
 
+/**
+ * Gmail, Docs, Sheets, Calendar and BigQuery arrive together: they are resource types of one vendor
+ * behind one OAuth client, so there is nothing here that selects among them. Which ones users may
+ * reach is runtime policy in /admin, which opts resources *out* of an offer every bound Gatekeeper
+ * makes by default (cloudflare-os/packages/workshop-backend/src/admin-config.ts).
+ */
+test("gives the Google Gatekeeper one OAuth client and the base URL it redirects to", async () => {
+  const bases = await baseConfigs();
+  const generated = generateConfigs(validConfig, bases);
+
+  assert.equal(generated.google.name, "acme-cloudflare-os-google");
+  // Both halves of the OAuth flow hang off this: the redirect URI registered with Google is this
+  // value plus "/oauth", and its pathname is the base path the Worker answers on. The upstream
+  // default is a localhost dev URL, so an absent value is a working deploy that redirects users to
+  // their own machine.
+  assert.deepEqual(generated.google.vars, { BASE_URL: "https://os.example.com/gatekeeper/google" });
+  assert.deepEqual(generated.google.secrets, { required: ["CLIENT_ID", "CLIENT_SECRET"] });
+
+  // Reached by both, for the two different things this Gatekeeper does: vendor RPC from the
+  // backend, and whole HTTP requests -- the OAuth callback -- from the router.
+  assert.deepEqual(
+    generated.workshop.services!.find((service) => service.binding === "GATEKEEPER_GOOGLE"),
+    {
+      binding: "GATEKEEPER_GOOGLE",
+      service: "acme-cloudflare-os-google",
+      entrypoint: "GatekeeperVendor",
+    });
+  assert.deepEqual(
+    generated.router.services!.find((service) => service.binding === "GATEKEEPER_GOOGLE"),
+    { binding: "GATEKEEPER_GOOGLE", service: "acme-cloudflare-os-google" });
+
+  // Every connected account and its refresh token lives in these Durable Objects, so the migration
+  // history has to arrive verbatim: a redeploy that dropped a tag would strand them all.
+  assert.deepEqual(generated.google.migrations, bases.google.migrations);
+  assert.ok(generated.google.migrations!.length > 0, "google lost its DO migrations");
+
+  // google.ts imports the generated configurator bundles, so the codegen runs before the type check
+  // that reads them.
+  const builds = buildCommands(validConfig)
+    .map(({ args }) => args)
+    .filter((args) => args.includes("@gadgets/google-gatekeeper"));
+  assert.deepEqual(builds.map((args) => args.at(-1)), ["build:configurator", "build"]);
+});
+
 test("keeps every Worker behind the router off the public internet", async () => {
   const generated = generateConfigs(validConfig, await baseConfigs());
   const workers = Object.entries(generated) as [string, ProdWranglerConfig][];
@@ -450,6 +502,13 @@ test("scopes PUBLIC_BASE_URL and Context sharing to the public origin", async ()
     explicit.workshop.vars!.PUBLIC_BASE_URL, "https://acme-cloudflare-os.acme.workers.dev");
   assert.equal(explicit.router.workers_dev, true);
   assert.equal(explicit.router.routes, undefined);
+
+  // The Google Gatekeeper's OAuth redirect is built from its own BASE_URL, so it has to follow the
+  // origin too: a redirect URI naming a hostname this deployment does not answer on is rejected by
+  // Google rather than by anything here.
+  assert.equal(derived.google.vars!.BASE_URL, "https://os.example.com/gatekeeper/google");
+  assert.equal(explicit.google.vars!.BASE_URL,
+    "https://acme-cloudflare-os.acme.workers.dev/gatekeeper/google");
 
   // sharingDomain: null follows the public origin, which is what the hosted deploy sets it to.
   assert.equal(sharingDomain(derived), "https://os.example.com");

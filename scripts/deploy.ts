@@ -25,6 +25,7 @@ const packageDirs = {
   context: "cloudflare-os/packages/gatekeeper-context",
   scheduler: "cloudflare-os/packages/gatekeeper-scheduler",
   github: "cloudflare-os/packages/gatekeeper-github",
+  google: "cloudflare-os/packages/gatekeeper-google",
   customGatekeeper: "packages/custom-gatekeeper",
   book: "packages/gatekeeper-book",
   errorReporter: "packages/error-reporter",
@@ -42,6 +43,7 @@ const requiredPaths = [
   "workers.context.name",
   "workers.scheduler.name",
   "workers.github.name",
+  "workers.google.name",
   "workers.customGatekeeper.name",
   "workers.book.name",
   "access.issuer",
@@ -444,6 +446,7 @@ export function generateConfigs(config: DeploymentConfig, bases: BaseConfigs): G
   const context = structuredClone(bases.context);
   const scheduler = structuredClone(bases.scheduler);
   const github = structuredClone(bases.github);
+  const google = structuredClone(bases.google);
   const customGatekeeper = structuredClone(bases.customGatekeeper);
   const book = structuredClone(bases.book);
   const errorReporter = config.errorReporting.enabled
@@ -458,9 +461,13 @@ export function generateConfigs(config: DeploymentConfig, bases: BaseConfigs): G
     // vendor-RPC bindings. The binding name is what picks the /gatekeeper/<name> path.
     { binding: "GATEKEEPER_CONTEXT", service: config.workers.context.name },
     { binding: "GATEKEEPER_SCHEDULER", service: config.workers.scheduler.name },
-    // The GitHub Gatekeeper is the one that genuinely needs this half: its OAuth callback lands on
+    // The two OAuth Gatekeepers genuinely need this half: the GitHub callback lands on
     // /gatekeeper/github/oauth, which reaches the Worker only through this binding.
     { binding: "GATEKEEPER_GITHUB", service: config.workers.github.name },
+    // And the Google Gatekeeper for the same reason: /gatekeeper/google/oauth is the redirect URI
+    // registered with Google, and it exists only because this binding names it. Vendor RPC alone
+    // would leave every connect attempt dead-ending.
+    { binding: "GATEKEEPER_GOOGLE", service: config.workers.google.name },
     { binding: "GATEKEEPER_CUSTOM", service: config.workers.customGatekeeper.name },
     { binding: "GATEKEEPER_BOOK", service: config.workers.book.name },
   ];
@@ -530,6 +537,15 @@ export function generateConfigs(config: DeploymentConfig, bases: BaseConfigs): G
       service: config.workers.github.name,
       entrypoint: "GatekeeperVendor",
     },
+    // Gmail, Docs, Sheets, Calendar and BigQuery all arrive with this one binding: they are
+    // resource types of a single vendor, not separate Gatekeepers. Which of them users may reach is
+    // runtime policy in /admin, not a deploy-time choice -- every bound Gatekeeper is offered by
+    // default and the admin UI opts individual resources back out.
+    {
+      binding: "GATEKEEPER_GOOGLE",
+      service: config.workers.google.name,
+      entrypoint: "GatekeeperVendor",
+    },
     {
       binding: "GATEKEEPER_CUSTOM",
       service: config.workers.customGatekeeper.name,
@@ -584,6 +600,15 @@ export function generateConfigs(config: DeploymentConfig, bases: BaseConfigs): G
   // the first user who tries to connect an account.
   github.secrets = { required: ["CLIENT_ID", "CLIENT_SECRET"] };
 
+  // The Google Gatekeeper reads its own BASE_URL the same way (`getBaseUrl` in
+  // cloudflare-os/packages/gatekeeper-google/src/google.ts) and carries the same localhost default,
+  // so it is derived here for the same reason.
+  setCommon(google, config, config.workers.google.name);
+  google.vars = { BASE_URL: `${origin}/gatekeeper/google` };
+  // One OAuth client behind all five Google resource types -- Gmail, Docs, Sheets, Calendar and
+  // BigQuery -- required for the same reason GitHub's is.
+  google.secrets = { required: ["CLIENT_ID", "CLIENT_SECRET"] };
+
   setCommon(customGatekeeper, config, config.workers.customGatekeeper.name);
   customGatekeeper.vars = {
     CUSTOM_NAME: config.customGatekeeper.name,
@@ -610,7 +635,7 @@ export function generateConfigs(config: DeploymentConfig, bases: BaseConfigs): G
   }
 
   return {
-    router, workshop, context, scheduler, github, customGatekeeper, book,
+    router, workshop, context, scheduler, github, google, customGatekeeper, book,
     ...(errorReporter && { errorReporter }),
   };
 }
@@ -662,6 +687,11 @@ export function buildCommands(config: DeploymentConfig): BuildCommand[] {
     // depends on, and running it here uncached is what upstream's own package `deploy` script does.
     { args: submoduleBuild("@gadgets/github-gatekeeper", "build:configurator") },
     { args: submoduleBuild("@gadgets/github-gatekeeper") },
+    // The same pair under the Google Gatekeeper's own names. `google.ts` imports five generated
+    // configurator bundles rather than one, but the reason for running the codegen by name -- and
+    // therefore uncached -- is the same.
+    { args: submoduleBuild("@gadgets/google-gatekeeper", "build:configurator") },
+    { args: submoduleBuild("@gadgets/google-gatekeeper") },
     { args: ownBuild("custom-gatekeeper") },
     // The app bundle first: `book.ts` imports src/generated/app.txt, so the type-check in the
     // step below fails outright if the bundle has never been written.
@@ -782,6 +812,7 @@ async function main(): Promise<void> {
     context: await readJsonc(join(root, packageDirs.context, "wrangler.jsonc")),
     scheduler: await readJsonc(join(root, packageDirs.scheduler, "wrangler.jsonc")),
     github: await readJsonc(join(root, packageDirs.github, "wrangler.jsonc")),
+    google: await readJsonc(join(root, packageDirs.google, "wrangler.jsonc")),
     customGatekeeper: await readJsonc(join(root, packageDirs.customGatekeeper, "wrangler.jsonc")),
     book: await readJsonc(join(root, packageDirs.book, "wrangler.jsonc")),
     errorReporter: await readJsonc(join(root, packageDirs.errorReporter, "wrangler.jsonc")),
@@ -804,6 +835,7 @@ async function main(): Promise<void> {
     deployWorker(packageDirs.context, deployArgs);
     deployWorker(packageDirs.scheduler, deployArgs);
     deployWorker(packageDirs.github, deployArgs);
+    deployWorker(packageDirs.google, deployArgs);
     deployWorker(packageDirs.customGatekeeper, deployArgs);
     deployWorker(packageDirs.book, deployArgs);
     deployWorker(packageDirs.workshop, deployArgs);

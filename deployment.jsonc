@@ -40,6 +40,16 @@
     // The OAuth App's callback URL must be <publicBaseUrl>/gatekeeper/github/oauth.
     "github": { "name": "stelaxis-os-github" },
 
+    // The Google Gatekeeper: Gmail, Google Docs, Sheets, Calendar, and BigQuery. One OAuth client
+    // serves the whole company, and each user connects their own Google account -- so everyone
+    // reaches exactly what their own Google permissions already allow. The client id and secret are
+    // Wrangler secrets, never values in this file:
+    //   pnpm exec wrangler secret put CLIENT_ID --name stelaxis-os-google
+    //   pnpm exec wrangler secret put CLIENT_SECRET --name stelaxis-os-google
+    // The client's authorized redirect URI must be <publicBaseUrl>/gatekeeper/google/oauth.
+    // Reference: docs/customization.md#google
+    "google": { "name": "stelaxis-os-google" },
+
     "customGatekeeper": { "name": "stelaxis-os-gatekeeper" },
 
     // The Book Gatekeeper, which mirrors a Git directory read-only on a cron.
