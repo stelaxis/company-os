@@ -41,7 +41,7 @@ Secrets are never valid values in this file. Install them interactively with Wra
 
 ### Workers and routing
 
-The deployment is eight Workers. Keep their names unique: service bindings use these names, so update and deploy them together.
+The deployment is nine Workers. Keep their names unique: service bindings use these names, so update and deploy them together.
 
 | Worker | Role |
 | --- | --- |
@@ -50,13 +50,14 @@ The deployment is eight Workers. Keep their names unique: service bindings use t
 | `context` | The Context Gatekeeper. |
 | `scheduler` | The Scheduler Gatekeeper, which gives agents scheduled and recurring work. |
 | `github` | The GitHub Gatekeeper. Each user connects their own account through it; see [GitHub](#github) below. |
+| `google` | The Google Gatekeeper: Gmail, Docs, Sheets, Calendar, and BigQuery; see [Google](#google) below. |
 | `customGatekeeper` | This repository's example integration. |
 | `book` | The Book Gatekeeper, which mirrors a Git directory read-only on a cron. |
 | `errorReporter` | The private explicit-issue destination. |
 
 Context and Scheduler are *ambient*: upstream's release marks both `PREINSTALL`, so the hosted flow installs them on every instance and this starter deploys them for the same reason. Neither takes configuration beyond its name — the Scheduler takes none at all.
 
-Only the router takes a route; the other seven are reachable only over service bindings, and the deploy turns off `workers.dev` and [Preview URLs](https://developers.cloudflare.com/workers/configuration/previews/) on all eight. That keeps the router the single Access-protected way in.
+Only the router takes a route; the other eight are reachable only over service bindings, and the deploy turns off `workers.dev` and [Preview URLs](https://developers.cloudflare.com/workers/configuration/previews/) on all nine. That keeps the router the single Access-protected way in.
 
 For production, set a [Custom Domain](https://developers.cloudflare.com/workers/configuration/routing/custom-domains/) on it:
 
@@ -121,6 +122,42 @@ CLOUDFLARE_ACCOUNT_ID=your-account-id pnpm exec wrangler secret put CLIENT_SECRE
 A connection is scoped by the Gatekeeper, not by GitHub: the OAuth grant carries the `repo` scope, so the stored token can reach every private repository its owner can, whatever single resource the connection names. A user unwilling to give this deployment that much reach should not connect their account to it.
 
 Sign-in is a separate question. This starter runs Cloudflare Access, so the Gatekeeper's `providesAuth` half is unused; adding `github` to upstream's `AUTH_GATEKEEPERS` only matters under the other [sign-in methods](#sign-in-methods).
+
+### Google
+
+Upstream's [`gatekeeper-google`](../cloudflare-os/packages/gatekeeper-google/README.md), deployed and bound by `scripts/deploy.ts` like every other Gatekeeper here. One Worker and one OAuth client carry five resource types:
+
+| Resource | What connecting one gives an agent | Scope |
+| --- | --- | --- |
+| Gmail | Read, organize, reply to, forward, and send mail in the connected mailbox | `gmail.modify` |
+| Google Docs | Read and edit the documents a user picks | `documents`, plus read-only Drive metadata for the picker |
+| Google Sheets | Read metadata and cell values from the spreadsheets a user picks | `spreadsheets.readonly` |
+| Google Calendar | List calendars and manage events on the ones a user picks | `calendar.events`, `calendar.calendarlist.readonly` |
+| BigQuery | Dry-run and run read-only SQL against a chosen project, optionally narrowed to a dataset or table | `bigquery` |
+
+Scopes are requested per resource rather than all at once: connecting a spreadsheet asks for the Sheets scopes and nothing else. BigQuery takes the broad `bigquery` scope instead of `bigquery.readonly` because dry-runs go through `jobs.insert`; the Gatekeeper enforces read-only SQL and the connection's resource scope itself.
+
+All five are offered to every user by default. That is not a setting this repository writes — every bound Gatekeeper is offered, and `/admin` opts vendors and individual resources back *out*. Turning Gmail off deployment-wide is an admin action, not a redeploy.
+
+Access is per user and there is no shared service-account mode: each person connects their own Google account and reaches exactly what that account already reaches. So enabling a resource type grants nobody data they could not already open themselves — what it grants is an *agent* acting as them, which is what the Workshop's observation approvals are the boundary for.
+
+#### Set up the OAuth client
+
+One client serves the whole company. In a Google Cloud project the company owns:
+
+1. Enable the APIs the resources need under **APIs & Services > Library**: Gmail, Google Docs, Google Drive (metadata, for the document and spreadsheet pickers), Google Sheets, Google Calendar, and BigQuery.
+2. Configure the OAuth consent screen as **Internal**. This is the part that makes it a company-wide integration: an Internal app on the organization's Google Workspace skips both the test-user allowlist and Google's verification review, and every scope above is one External apps need that review for.
+3. Create an **OAuth client ID** of type *Web application* whose authorized redirect URI is the deployment's own, `<publicBaseUrl>/gatekeeper/google/oauth`. As with GitHub, the deploy derives that address from the public origin and writes it as the Worker's `BASE_URL`, so a mismatch surfaces as Google's `redirect_uri_mismatch` rather than as a failed deploy. Leave **Authorized JavaScript origins** empty: the browser is only ever redirected, and the code-for-token exchange happens inside the Worker with the client secret.
+4. Install the credentials against the Google Worker:
+
+```sh
+CLOUDFLARE_ACCOUNT_ID=your-account-id pnpm exec wrangler secret put CLIENT_ID --name your-google-worker
+CLOUDFLARE_ACCOUNT_ID=your-account-id pnpm exec wrangler secret put CLIENT_SECRET --name your-google-worker
+```
+
+Both are declared [required](https://developers.cloudflare.com/workers/configuration/secrets/#validate-secrets-before-deploy) in the generated Wrangler config, so a deployment missing either is refused at deploy time rather than discovered by the first user who tries to connect an account. Install them *before* the first deploy that includes this Worker, including the one CI runs on a push to `main`: on an account where the Worker does not exist yet, `wrangler secret put` offers to create a draft Worker of that name to hold them, which the deploy then overwrites.
+
+Sign-in is untouched by any of this. This deployment authenticates with Cloudflare Access; "Continue with Google" is a separate upstream feature gated on the `AUTH_GATEKEEPERS` allowlist, which the starter does not set. See [Sign-in methods](#sign-in-methods).
 
 ### Storage
 

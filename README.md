@@ -46,7 +46,7 @@ This repository adds deployment controls around a pinned [Cloudflare OS](https:/
 
 <img src="docs/assets/architecture.svg" alt="Cloudflare OS deployment architecture: users reach one public route, owned by the router Worker, which serves the frontend and proxies /api to the Workshop backend and /gatekeeper/&lt;name&gt; to the matching Gatekeeper. Behind it is the pinned Cloudflare OS release, holding the Workshop kernel, Gadgets, Blueprints, and the default Gatekeepers. Service bindings connect it to the Workers and resources this repository owns: AI Gateway with no API token, custom Gatekeepers, the Error Reporter, and KV and R2 storage.">
 
-The deployment is eight Workers. A **router** owns the public route and serves the frontend, proxying `/api` to the Workshop backend and `/gatekeeper/<name>` to whichever Gatekeeper the binding name matches; the Workshop, the Context, Scheduler, GitHub, Book and custom Gatekeepers, and the Error Reporter sit behind it with no route of their own, reachable only over service bindings.
+The deployment is nine Workers. A **router** owns the public route and serves the frontend, proxying `/api` to the Workshop backend and `/gatekeeper/<name>` to whichever Gatekeeper the binding name matches; the Workshop, the Context, Scheduler, GitHub, Google, Book and custom Gatekeepers, and the Error Reporter sit behind it with no route of their own, reachable only over service bindings.
 
 The deploy command derives temporary Wrangler files from upstream base configs, builds the frontend in Cloudflare Access mode, deploys the private Error Reporter, the Gatekeepers and the Workshop before the router that binds them, and removes generated files even on failure. Secrets never enter tracked configuration.
 
@@ -91,7 +91,7 @@ pnpm check
 pnpm deploy
 ```
 
-Two Gatekeepers declare required secrets, so install those first or Wrangler refuses the deploy rather than shipping a Worker that fails on its first use: the Book Gatekeeper's `GITHUB_TOKEN`, and the GitHub Gatekeeper's `CLIENT_ID` and `CLIENT_SECRET` from one GitHub OAuth App — see [GitHub](docs/customization.md#github) for registering it.
+Three Gatekeepers declare required secrets, so install those first or Wrangler refuses the deploy rather than shipping a Worker that fails on its first use: the Book Gatekeeper's `GITHUB_TOKEN`, and a `CLIENT_ID`/`CLIENT_SECRET` pair each for the GitHub Gatekeeper and the Google Gatekeeper — see [GitHub](docs/customization.md#github) and [Google](docs/customization.md#google) for registering the OAuth App and the OAuth client.
 
 With resource values left as `null`, Wrangler creates the three KV namespaces and R2 bucket automatically and reconnects them on later deploys. Set explicit IDs or a bucket name when the deployment must reuse existing resources.
 
@@ -110,6 +110,7 @@ Backend error reporting is enabled without a vendor account. Explicit upstream i
 - Open the Error Reporter Worker's [Workers Logs](https://developers.cloudflare.com/workers/observability/logs/workers-logs/) and verify its structured `error_report` query surface.
 - Ask an agent to schedule something a few minutes out, and confirm it runs — that exercises the Scheduler Gatekeeper end to end.
 - Connect a GitHub account from a gadget's Connections tab, attach one repository or issue, and confirm an agent can read it — that exercises the OAuth callback, so a `redirect_uri_mismatch` here means the OAuth App's callback URL is not `<publicBaseUrl>/gatekeeper/github/oauth`.
+- Connect a Google account the same way and attach one resource — a BigQuery project, a document, a mailbox — which checks the second OAuth client and, on an Internal consent screen, that the signing-in user is inside the Workspace organization.
 - Review logs for the router, Workshop, Context, Scheduler, custom Gatekeeper, and Error Reporter Workers.
 
 ## Customization
