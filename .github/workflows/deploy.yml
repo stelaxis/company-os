@@ -1,0 +1,106 @@
+name: Deploy
+
+# Continuous deployment. Every push to main runs the same scripts/deploy.ts a maintainer runs by
+# hand: it derives the Wrangler configs from deployment.jsonc, builds the frontend and every
+# Worker, and uploads them in dependency order, the router last.
+#
+# Setup, once:
+#   1. Create a Cloudflare API token for the account in deployment.jsonc (accountId). The "Edit
+#      Cloudflare Workers" template covers Workers Scripts, KV and R2 -- KV and R2 are needed
+#      because `resources` values left null are provisioned by Wrangler and re-linked on later
+#      deploys. Add DNS:Edit on the zone holding workers.router.route.customDomain, which Wrangler
+#      manages for the router's custom domain.
+#   2. Store it as the repository secret CLOUDFLARE_API_TOKEN.
+#
+# Wrangler secrets are not deployed from here and are not in this repository: they live on the
+# Workers themselves. GITHUB_TOKEN on the Book Gatekeeper is declared required, so a deploy fails
+# if it was never installed -- see packages/gatekeeper-book/README.md.
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  NODE_VERSION: "24.19.0"
+
+concurrency:
+  # Never cancel: the Workers are uploaded in sequence and the router, which binds every one of
+  # them, goes last. An interrupted run leaves the deployment half-applied, so a second push waits
+  # for the first to finish rather than replacing it mid-upload.
+  group: deploy-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Deploy to Cloudflare
+    runs-on: ubuntu-latest
+    # Install, build, and one upload per Worker. The cap exists so a wedged build fails the run
+    # instead of holding the concurrency group -- and every push behind it -- for the 6-hour
+    # default.
+    timeout-minutes: 30
+    # Records each run in the repository's Deployments panel, and is where a required reviewer or
+    # an environment-scoped CLOUDFLARE_API_TOKEN would go. The URL mirrors
+    # workers.router.route.customDomain in deployment.jsonc; it is only the link shown there, so a
+    # stale value costs a wrong link and nothing else.
+    environment:
+      name: production
+      url: https://os.stelaxis.org
+    steps:
+      # First, ahead of the ~5 minutes of install and build it guards: without the token Wrangler
+      # fails at the first upload with an authentication error that says nothing about this being
+      # a missing repository secret. Presence only; the value is never printed.
+      - name: Verify the deploy credential is present
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          if [[ -z "$CLOUDFLARE_API_TOKEN" ]]; then
+            echo "CLOUDFLARE_API_TOKEN is not set for this repository. Add it under" \
+              "Settings > Secrets and variables > Actions, scoped to the Cloudflare account in" \
+              "deployment.jsonc."
+            exit 1
+          fi
+
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # The pinned Cloudflare OS release. Not optional: pnpm-workspace.yaml makes two of its
+          # packages members of this workspace, the deploy reads four base wrangler.jsonc files
+          # from it, and scripts/deploy.ts refuses to run without it.
+          submodules: true
+          persist-credentials: false
+
+      # Ahead of setup-node, which shells out to `pnpm store path` to find the directory it caches.
+      - name: Enable Corepack
+        run: corepack enable
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+          cache-dependency-path: |
+            pnpm-lock.yaml
+            cloudflare-os/pnpm-lock.yaml
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # A second, separate install: the submodule is its own pnpm workspace with its own lockfile,
+      # and the deploy builds its packages through `vp --dir cloudflare-os`. This is the split
+      # docs/customization.md warns about when bumping the gitlink -- a catalog entry that drifts
+      # from the submodule's fails here rather than on a deduped dev machine.
+      - name: Install Cloudflare OS dependencies
+        run: pnpm --dir cloudflare-os install --frozen-lockfile
+
+      # `pnpm run deploy`, not `pnpm deploy`: pnpm has a built-in command by that name.
+      # Everything is built before the first upload, so a broken build fails without having
+      # touched the live deployment.
+      - name: Deploy
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: pnpm run deploy
