@@ -50,6 +50,16 @@
     // Reference: docs/customization.md#google
     "google": { "name": "stelaxis-os-google" },
 
+    // The Slack Gatekeeper: read-only access to workspaces, channels, DMs and threads. It asks for
+    // *user* token scopes, so each person connects their own Slack account and an agent sees
+    // exactly what that person sees -- private channels and DMs included. One Slack app serves the
+    // whole company; its credentials are Wrangler secrets, never values in this file:
+    //   pnpm exec wrangler secret put CLIENT_ID --name stelaxis-os-slack
+    //   pnpm exec wrangler secret put CLIENT_SECRET --name stelaxis-os-slack
+    // The app's redirect URL must be <publicBaseUrl>/gatekeeper/slack/oauth.
+    // Reference: docs/customization.md#slack
+    "slack": { "name": "stelaxis-os-slack" },
+
     "customGatekeeper": { "name": "stelaxis-os-gatekeeper" },
 
     // The Book Gatekeeper, which mirrors a Git directory read-only on a cron.

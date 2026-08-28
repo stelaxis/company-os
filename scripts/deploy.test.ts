@@ -20,6 +20,7 @@ const validConfig: DeploymentConfig = {
     scheduler: { name: "acme-cloudflare-os-scheduler" },
     github: { name: "acme-cloudflare-os-github" },
     google: { name: "acme-cloudflare-os-google" },
+    slack: { name: "acme-cloudflare-os-slack" },
     customGatekeeper: { name: "acme-cloudflare-os-custom" },
     book: { name: "acme-cloudflare-os-book" },
     mcpPortal: { name: "acme-cloudflare-os-mcp-portal" },
@@ -89,6 +90,7 @@ async function baseConfigs(): Promise<BaseConfigs> {
     scheduler: await baseConfig("../cloudflare-os/packages/gatekeeper-scheduler/wrangler.jsonc"),
     github: await baseConfig("../cloudflare-os/packages/gatekeeper-github/wrangler.jsonc"),
     google: await baseConfig("../cloudflare-os/packages/gatekeeper-google/wrangler.jsonc"),
+    slack: await baseConfig("../cloudflare-os/packages/gatekeeper-slack/wrangler.jsonc"),
     customGatekeeper: await baseConfig("../packages/custom-gatekeeper/wrangler.jsonc"),
     book: await baseConfig("../packages/gatekeeper-book/wrangler.jsonc"),
     mcpPortal: await baseConfig(
@@ -250,6 +252,11 @@ test("generates Access-mode Workshop, Context, and custom Gatekeeper configs", a
       entrypoint: "GatekeeperVendor",
     },
     {
+      binding: "GATEKEEPER_SLACK",
+      service: "acme-cloudflare-os-slack",
+      entrypoint: "GatekeeperVendor",
+    },
+    {
       binding: "GATEKEEPER_CUSTOM",
       service: "acme-cloudflare-os-custom",
       entrypoint: "GatekeeperVendor",
@@ -308,6 +315,7 @@ test("gives the router the public route, the frontend, and every service binding
     { binding: "GATEKEEPER_SCHEDULER", service: "acme-cloudflare-os-scheduler" },
     { binding: "GATEKEEPER_GITHUB", service: "acme-cloudflare-os-github" },
     { binding: "GATEKEEPER_GOOGLE", service: "acme-cloudflare-os-google" },
+    { binding: "GATEKEEPER_SLACK", service: "acme-cloudflare-os-slack" },
     { binding: "GATEKEEPER_CUSTOM", service: "acme-cloudflare-os-custom" },
     { binding: "GATEKEEPER_BOOK", service: "acme-cloudflare-os-book" },
     { binding: "GATEKEEPER_MCP_PORTAL", service: "acme-cloudflare-os-mcp-portal" },
@@ -484,6 +492,42 @@ test("gives the Google Gatekeeper one OAuth client and the base URL it redirects
   const builds = buildCommands(validConfig)
     .map(({ args }) => args)
     .filter((args) => args.includes("@gadgets/google-gatekeeper"));
+  assert.deepEqual(builds.map((args) => args.at(-1)), ["build:configurator", "build"]);
+});
+
+test("gives the Slack Gatekeeper one Slack app and the base URL it redirects to", async () => {
+  const bases = await baseConfigs();
+  const generated = generateConfigs(validConfig, bases);
+
+  assert.equal(generated.slack.name, "acme-cloudflare-os-slack");
+  // Same shape as GitHub's and Google's, and load-bearing for the same two reasons: the redirect
+  // URL registered with the Slack app is this value plus "/oauth", and `fetch` throws outright on
+  // any request whose path does not start with its pathname.
+  assert.deepEqual(generated.slack.vars, { BASE_URL: "https://os.example.com/gatekeeper/slack" });
+  assert.deepEqual(generated.slack.secrets, { required: ["CLIENT_ID", "CLIENT_SECRET"] });
+
+  // Vendor RPC from the backend; whole HTTP requests -- the OAuth callback -- from the router.
+  assert.deepEqual(
+    generated.workshop.services!.find((service) => service.binding === "GATEKEEPER_SLACK"),
+    {
+      binding: "GATEKEEPER_SLACK",
+      service: "acme-cloudflare-os-slack",
+      entrypoint: "GatekeeperVendor",
+    });
+  assert.deepEqual(
+    generated.router.services!.find((service) => service.binding === "GATEKEEPER_SLACK"),
+    { binding: "GATEKEEPER_SLACK", service: "acme-cloudflare-os-slack" });
+
+  // Four classes here rather than GitHub's one: the per-user `UserAccount` plus a Durable Object
+  // per grant granularity. Dropping a tag would strand every connected account and every grant.
+  assert.deepEqual(generated.slack.migrations, bases.slack.migrations);
+  assert.ok(generated.slack.migrations!.length > 0, "slack lost its DO migrations");
+
+  // slack.ts imports three generated configurator bundles -- workspace, conversation, thread -- so
+  // the codegen runs before the type check that reads them.
+  const builds = buildCommands(validConfig)
+    .map(({ args }) => args)
+    .filter((args) => args.includes("@gadgets/slack-gatekeeper"));
   assert.deepEqual(builds.map((args) => args.at(-1)), ["build:configurator", "build"]);
 });
 

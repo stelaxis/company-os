@@ -180,6 +180,12 @@ export interface DeploymentConfig {
      * redirects under is derived from the deployment's public origin.
      */
     google: { name: string };
+    /**
+     * The Slack Gatekeeper, read-only across workspaces, conversations and threads. One Slack app's
+     * `CLIENT_ID`/`CLIENT_SECRET` stand behind it, Wrangler secrets like the other two OAuth
+     * Gatekeepers', so the Worker name is all this file carries.
+     */
+    slack: { name: string };
     customGatekeeper: { name: string };
     /** The Book Gatekeeper, which mirrors a Git directory and serves it read-only. */
     book: { name: string };
@@ -261,6 +267,7 @@ export interface GeneratedConfigs {
   scheduler: ProdWranglerConfig;
   github: ProdWranglerConfig;
   google: ProdWranglerConfig;
+  slack: ProdWranglerConfig;
   customGatekeeper: ProdWranglerConfig;
   book: ProdWranglerConfig;
   mcpPortal: ProdWranglerConfig;
@@ -276,6 +283,7 @@ export interface BaseConfigs {
   scheduler: ProdWranglerConfig;
   github: ProdWranglerConfig;
   google: ProdWranglerConfig;
+  slack: ProdWranglerConfig;
   customGatekeeper: ProdWranglerConfig;
   book: ProdWranglerConfig;
   mcpPortal: ProdWranglerConfig;
