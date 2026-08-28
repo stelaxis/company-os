@@ -43,7 +43,7 @@ Secrets are never valid values in this file. Install them interactively with Wra
 
 ### Workers and routing
 
-The deployment is ten Workers. Keep their names unique: service bindings use these names, so update and deploy them together.
+The deployment is eleven Workers. Keep their names unique: service bindings use these names, so update and deploy them together.
 
 | Worker | Role |
 | --- | --- |
@@ -53,6 +53,7 @@ The deployment is ten Workers. Keep their names unique: service bindings use the
 | `scheduler` | The Scheduler Gatekeeper, which gives agents scheduled and recurring work. |
 | `github` | The GitHub Gatekeeper. Each user connects their own account through it; see [GitHub](#github) below. |
 | `google` | The Google Gatekeeper: Gmail, Docs, Sheets, Calendar, and BigQuery; see [Google](#google) below. |
+| `slack` | The Slack Gatekeeper, read-only over workspaces, conversations, and threads; see [Slack](#slack) below. |
 | `customGatekeeper` | This repository's example integration. |
 | `book` | The Book Gatekeeper, which mirrors a Git directory read-only on a cron. |
 | `mcpPortal` | The [MCP Portal Gatekeeper](#mcp-server-portal), which fronts the organization's MCP server portal. |
@@ -60,7 +61,7 @@ The deployment is ten Workers. Keep their names unique: service bindings use the
 
 Context and Scheduler are *ambient*: upstream's release marks both `PREINSTALL`, so the hosted flow installs them on every instance and this starter deploys them for the same reason. Neither takes configuration beyond its name — the Scheduler takes none at all.
 
-Only the router takes a route; the other nine are reachable only over service bindings, and the deploy turns off `workers.dev` and [Preview URLs](https://developers.cloudflare.com/workers/configuration/previews/) on all ten. That keeps the router the single Access-protected way in.
+Only the router takes a route; the other ten are reachable only over service bindings, and the deploy turns off `workers.dev` and [Preview URLs](https://developers.cloudflare.com/workers/configuration/previews/) on all eleven. That keeps the router the single Access-protected way in.
 
 For production, set a [Custom Domain](https://developers.cloudflare.com/workers/configuration/routing/custom-domains/) on it:
 
@@ -161,6 +162,39 @@ CLOUDFLARE_ACCOUNT_ID=your-account-id pnpm exec wrangler secret put CLIENT_SECRE
 Both are declared [required](https://developers.cloudflare.com/workers/configuration/secrets/#validate-secrets-before-deploy) in the generated Wrangler config, so a deployment missing either is refused at deploy time rather than discovered by the first user who tries to connect an account. Install them *before* the first deploy that includes this Worker, including the one CI runs on a push to `main`: on an account where the Worker does not exist yet, `wrangler secret put` offers to create a draft Worker of that name to hold them, which the deploy then overwrites.
 
 Sign-in is untouched by any of this. This deployment authenticates with Cloudflare Access; "Continue with Google" is a separate upstream feature gated on the `AUTH_GATEKEEPERS` allowlist, which the starter does not set. See [Sign-in methods](#sign-in-methods).
+
+### Slack
+
+Upstream's [`gatekeeper-slack`](../cloudflare-os/packages/gatekeeper-slack/README.md), the third OAuth Gatekeeper here and the only **read-only** one: it never posts, edits, or reacts. Access is granted at one of three granularities, and the granularity decides which scopes the consent screen asks for:
+
+| Resource | What connecting one gives an agent | User token scopes |
+| --- | --- | --- |
+| Slack Workspace | Channels, DMs, members, and search across the whole connected workspace, auto-detected from the account | `team:read`, the conversation read scopes, `search:read` |
+| Slack Conversation | One channel, DM, or group DM — its info, members, messages, and threads, with search hard-restricted to that conversation | the conversation read scopes, `search:read` |
+| Slack Thread | One message and its replies | `channels:history`, `groups:history`, `im:history`, `mpim:history` |
+
+The conversation read scopes are `channels`, `groups`, `im`, and `mpim`, each `:read` and `:history`. `users:read` is always requested, for account display and resolving mentions to names.
+
+The token is a Slack **user** token (`xoxp-…`), requested through `user_scope` rather than a bot token. That is what makes a connection reach private channels and DMs at all — but it also means the reach is exactly the connecting person's own, so a workspace grant is that user's whole Slack, not a bot's slice of it. Nobody gains data they could not already open themselves; what they gain is an agent acting as them.
+
+#### Set up the Slack app
+
+One app serves the whole company. At [api.slack.com/apps](https://api.slack.com/apps), in the workspace agents should read:
+
+1. Create an app **from scratch**.
+2. Under **OAuth & Permissions**, add the deployment's own redirect URL, `<publicBaseUrl>/gatekeeper/slack/oauth`. As with GitHub and Google, the deploy derives it from the public origin and writes it as the Worker's `BASE_URL`, and the Worker throws on any request whose path does not match — so a stale value is not a cosmetic mismatch but every forwarded request failing.
+3. Enable **Token Rotation** (OAuth & Permissions → *Token Rotation*). Tokens then expire in about 12 hours and the Gatekeeper refreshes them itself. Non-rotating tokens work as a fallback, so this is a choice about how long a leaked token stays useful.
+4. Add the **User Token Scopes** from the table above — User, not Bot; the Gatekeeper never requests bot scopes, and a scope granted only to the bot leaves the matching resource unavailable. A resource is offered only once *every* scope it needs was granted.
+5. Install the credentials from **Basic Information > App Credentials** against the Slack Worker:
+
+```sh
+CLOUDFLARE_ACCOUNT_ID=your-account-id pnpm exec wrangler secret put CLIENT_ID --name your-slack-worker
+CLOUDFLARE_ACCOUNT_ID=your-account-id pnpm exec wrangler secret put CLIENT_SECRET --name your-slack-worker
+```
+
+Both are declared required, so install them before the first deploy that includes this Worker, for the reason spelled out under [Google](#google) above.
+
+If the workspace restricts app installation, a Slack admin has to approve the app once before anyone can connect; after that each user authorizes their own account from the Connections tab.
 
 ### MCP server portal
 

@@ -69,7 +69,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # The pinned Cloudflare OS release. Not optional: pnpm-workspace.yaml makes two of its
-          # packages members of this workspace, the deploy reads four base wrangler.jsonc files
+          # packages members of this workspace, the deploy reads eight base wrangler.jsonc files
           # from it, and scripts/deploy.ts refuses to run without it.
           submodules: true
           persist-credentials: false

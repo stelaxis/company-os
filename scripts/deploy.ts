@@ -26,6 +26,7 @@ const packageDirs = {
   scheduler: "cloudflare-os/packages/gatekeeper-scheduler",
   github: "cloudflare-os/packages/gatekeeper-github",
   google: "cloudflare-os/packages/gatekeeper-google",
+  slack: "cloudflare-os/packages/gatekeeper-slack",
   customGatekeeper: "packages/custom-gatekeeper",
   book: "packages/gatekeeper-book",
   mcpPortal: "cloudflare-os/packages/gatekeeper-mcp-portal",
@@ -45,6 +46,7 @@ const requiredPaths = [
   "workers.scheduler.name",
   "workers.github.name",
   "workers.google.name",
+  "workers.slack.name",
   "workers.customGatekeeper.name",
   "workers.book.name",
   "workers.mcpPortal.name",
@@ -504,6 +506,7 @@ export function generateConfigs(config: DeploymentConfig, bases: BaseConfigs): G
   const scheduler = structuredClone(bases.scheduler);
   const github = structuredClone(bases.github);
   const google = structuredClone(bases.google);
+  const slack = structuredClone(bases.slack);
   const customGatekeeper = structuredClone(bases.customGatekeeper);
   const book = structuredClone(bases.book);
   const mcpPortal = structuredClone(bases.mcpPortal);
@@ -519,13 +522,16 @@ export function generateConfigs(config: DeploymentConfig, bases: BaseConfigs): G
     // vendor-RPC bindings. The binding name is what picks the /gatekeeper/<name> path.
     { binding: "GATEKEEPER_CONTEXT", service: config.workers.context.name },
     { binding: "GATEKEEPER_SCHEDULER", service: config.workers.scheduler.name },
-    // The two OAuth Gatekeepers genuinely need this half: the GitHub callback lands on
+    // The OAuth Gatekeepers genuinely need this half: the GitHub callback lands on
     // /gatekeeper/github/oauth, which reaches the Worker only through this binding.
     { binding: "GATEKEEPER_GITHUB", service: config.workers.github.name },
     // And the Google Gatekeeper for the same reason: /gatekeeper/google/oauth is the redirect URI
     // registered with Google, and it exists only because this binding names it. Vendor RPC alone
     // would leave every connect attempt dead-ending.
     { binding: "GATEKEEPER_GOOGLE", service: config.workers.google.name },
+    // And the Slack Gatekeeper, third of the three: /gatekeeper/slack/oauth is the redirect URL
+    // registered with the Slack app.
+    { binding: "GATEKEEPER_SLACK", service: config.workers.slack.name },
     { binding: "GATEKEEPER_CUSTOM", service: config.workers.customGatekeeper.name },
     { binding: "GATEKEEPER_BOOK", service: config.workers.book.name },
     // Not decoration: the portal's OAuth redirect lands on /gatekeeper/mcp-portal, which is this
@@ -607,6 +613,15 @@ export function generateConfigs(config: DeploymentConfig, bases: BaseConfigs): G
       service: config.workers.google.name,
       entrypoint: "GatekeeperVendor",
     },
+    // No props, for GitHub's reason: one `UserAccount` Durable Object per signed-in user, keyed by
+    // that user's own OAuth grant. What it holds is a Slack *user* token, so a connection reaches
+    // exactly the channels, DMs and threads that person already reaches -- there is no
+    // workspace-wide bot identity for a deployment-scoped prop to narrow.
+    {
+      binding: "GATEKEEPER_SLACK",
+      service: config.workers.slack.name,
+      entrypoint: "GatekeeperVendor",
+    },
     {
       binding: "GATEKEEPER_CUSTOM",
       service: config.workers.customGatekeeper.name,
@@ -677,6 +692,15 @@ export function generateConfigs(config: DeploymentConfig, bases: BaseConfigs): G
   // BigQuery -- required for the same reason GitHub's is.
   google.secrets = { required: ["CLIENT_ID", "CLIENT_SECRET"] };
 
+  // The third Gatekeeper reading BASE_URL the same way, down to the same localhost default and the
+  // same throw on a path that does not match it (`getBaseUrl`/`getBasePath` in
+  // cloudflare-os/packages/gatekeeper-slack/src/slack.ts).
+  setCommon(slack, config, config.workers.slack.name);
+  slack.vars = { BASE_URL: `${origin}/gatekeeper/slack` };
+  // One Slack app's credentials, whose redirect URL must be `${BASE_URL}/oauth`. Required for the
+  // same reason the other two pairs are.
+  slack.secrets = { required: ["CLIENT_ID", "CLIENT_SECRET"] };
+
   setCommon(customGatekeeper, config, config.workers.customGatekeeper.name);
   customGatekeeper.vars = {
     CUSTOM_NAME: config.customGatekeeper.name,
@@ -725,7 +749,7 @@ export function generateConfigs(config: DeploymentConfig, bases: BaseConfigs): G
   }
 
   return {
-    router, workshop, context, scheduler, github, google, customGatekeeper, book, mcpPortal,
+    router, workshop, context, scheduler, github, google, slack, customGatekeeper, book, mcpPortal,
     ...(errorReporter && { errorReporter }),
   };
 }
@@ -782,6 +806,10 @@ export function buildCommands(config: DeploymentConfig): BuildCommand[] {
     // therefore uncached -- is the same.
     { args: submoduleBuild("@gadgets/google-gatekeeper", "build:configurator") },
     { args: submoduleBuild("@gadgets/google-gatekeeper") },
+    // And once more for Slack, whose three configurator bundles -- workspace, conversation and
+    // thread -- `slack.ts` imports the same way.
+    { args: submoduleBuild("@gadgets/slack-gatekeeper", "build:configurator") },
+    { args: submoduleBuild("@gadgets/slack-gatekeeper") },
     // And the MCP Portal Gatekeeper's grant form. Its `build` is a vp task that dependsOn
     // `build:configurator`, so naming the codegen explicitly is belt and braces rather than
     // strictly required -- but it is the same shape as the pairs above, for the same reason.
@@ -908,6 +936,7 @@ async function main(): Promise<void> {
     scheduler: await readJsonc(join(root, packageDirs.scheduler, "wrangler.jsonc")),
     github: await readJsonc(join(root, packageDirs.github, "wrangler.jsonc")),
     google: await readJsonc(join(root, packageDirs.google, "wrangler.jsonc")),
+    slack: await readJsonc(join(root, packageDirs.slack, "wrangler.jsonc")),
     customGatekeeper: await readJsonc(join(root, packageDirs.customGatekeeper, "wrangler.jsonc")),
     book: await readJsonc(join(root, packageDirs.book, "wrangler.jsonc")),
     mcpPortal: await readJsonc(join(root, packageDirs.mcpPortal, "wrangler.jsonc")),
@@ -932,6 +961,7 @@ async function main(): Promise<void> {
     deployWorker(packageDirs.scheduler, deployArgs);
     deployWorker(packageDirs.github, deployArgs);
     deployWorker(packageDirs.google, deployArgs);
+    deployWorker(packageDirs.slack, deployArgs);
     deployWorker(packageDirs.customGatekeeper, deployArgs);
     deployWorker(packageDirs.book, deployArgs);
     deployWorker(packageDirs.mcpPortal, deployArgs);
