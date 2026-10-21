@@ -129,19 +129,22 @@ Sign-in is a separate question. This starter runs Cloudflare Access, so the Gate
 
 ### Google
 
-Upstream's [`gatekeeper-google`](../cloudflare-os/packages/gatekeeper-google/README.md), deployed and bound by `scripts/deploy.ts` like every other Gatekeeper here. One Worker and one OAuth client carry five resource types:
+Upstream's [`gatekeeper-google`](../cloudflare-os/packages/gatekeeper-google/README.md), deployed and bound by `scripts/deploy.ts` like every other Gatekeeper here. One Worker and one OAuth client carry eight resource types:
 
 | Resource | What connecting one gives an agent | Scope |
 | --- | --- | --- |
 | Gmail | Read, organize, reply to, forward, and send mail in the connected mailbox | `gmail.modify` |
-| Google Docs | Read and edit the documents a user picks | `documents`, plus read-only Drive metadata for the picker |
-| Google Sheets | Read metadata and cell values from the spreadsheets a user picks | `spreadsheets.readonly` |
+| Google Docs | Read, edit, and create the documents a user picks | `documents`, plus read-only Drive metadata for the picker |
+| Google Sheets | Read the spreadsheets a user picks and, with approval, edit and create them | `spreadsheets`, plus read-only Drive metadata for the picker |
+| Google Slides | Read, edit, create, and render thumbnails of the presentations a user picks | `presentations`, plus read-only Drive metadata for the picker |
+| Google Drive | Discover and read files across a whole account, a folder, or one file, including the text of PDFs | `drive.readonly` (restricted), plus the read-only Docs, Sheets, and Slides scopes |
 | Google Calendar | List calendars and manage events on the ones a user picks | `calendar.events`, `calendar.calendarlist.readonly` |
+| Google Chat | Read spaces, direct messages, and threads and, with approval, send, edit, and react; a whole-account connection can also start conversations with people in the organization's directory | `chat.spaces.readonly`, `chat.messages`, `chat.memberships.readonly`, and for a whole-account connection `chat.users.readstate.readonly`, `chat.spaces.create`, `directory.readonly` |
 | BigQuery | Dry-run and run read-only SQL against a chosen project, optionally narrowed to a dataset or table | `bigquery` |
 
-Scopes are requested per resource rather than all at once: connecting a spreadsheet asks for the Sheets scopes and nothing else. BigQuery takes the broad `bigquery` scope instead of `bigquery.readonly` because dry-runs go through `jobs.insert`; the Gatekeeper enforces read-only SQL and the connection's resource scope itself.
+Scopes are requested per resource rather than all at once: connecting a spreadsheet asks for the Sheets scopes and nothing else. Drive reads a PDF's text with Workers AI's `toMarkdown()` over the Worker's own `AI` binding, which its base config declares and the deploy carries over; no gateway is configured for it. BigQuery takes the broad `bigquery` scope instead of `bigquery.readonly` because dry-runs go through `jobs.insert`; the Gatekeeper enforces read-only SQL and the connection's resource scope itself.
 
-All five are offered to every user by default. That is not a setting this repository writes — every bound Gatekeeper is offered, and `/admin` opts vendors and individual resources back *out*. Turning Gmail off deployment-wide is an admin action, not a redeploy.
+All eight are offered to every user by default. That is not a setting this repository writes — every bound Gatekeeper is offered, and `/admin` opts vendors and individual resources back *out*. Turning Gmail off deployment-wide is an admin action, not a redeploy.
 
 Access is per user and there is no shared service-account mode: each person connects their own Google account and reaches exactly what that account already reaches. So enabling a resource type grants nobody data they could not already open themselves — what it grants is an *agent* acting as them, which is what the Workshop's observation approvals are the boundary for.
 
@@ -149,7 +152,7 @@ Access is per user and there is no shared service-account mode: each person conn
 
 One client serves the whole company. In a Google Cloud project the company owns:
 
-1. Enable the APIs the resources need under **APIs & Services > Library**: Gmail, Google Docs, Google Drive (metadata, for the document and spreadsheet pickers), Google Sheets, Google Calendar, and BigQuery.
+1. Enable the APIs the resources need under **APIs & Services > Library**: Gmail, Google Docs, Google Drive (the pickers and the Drive resource), Google Sheets, Google Slides, Google Calendar, Google Chat, People (Chat participant names and directory search), and BigQuery. For Chat, also open the Google Chat API's **Configuration** tab, set an app name, avatar URL, and description, turn off **Interactive features**, and save: reads work without it, but Google refuses every Chat send, edit, and reaction until a Chat app is configured.
 2. Configure the OAuth consent screen as **Internal**. This is the part that makes it a company-wide integration: an Internal app on the organization's Google Workspace skips both the test-user allowlist and Google's verification review, and every scope above is one External apps need that review for.
 3. Create an **OAuth client ID** of type *Web application* whose authorized redirect URI is the deployment's own, `<publicBaseUrl>/gatekeeper/google/oauth`. As with GitHub, the deploy derives that address from the public origin and writes it as the Worker's `BASE_URL`, so a mismatch surfaces as Google's `redirect_uri_mismatch` rather than as a failed deploy. Leave **Authorized JavaScript origins** empty: the browser is only ever redirected, and the code-for-token exchange happens inside the Worker with the client secret.
 4. Install the credentials against the Google Worker:
@@ -170,10 +173,10 @@ Upstream's [`gatekeeper-slack`](../cloudflare-os/packages/gatekeeper-slack/READM
 | Resource | What connecting one gives an agent | User token scopes |
 | --- | --- | --- |
 | Slack Workspace | Channels, DMs, members, and search across the whole connected workspace, auto-detected from the account | `team:read`, the conversation read scopes, `search:read` |
-| Slack Conversation | One channel, DM, or group DM — its info, members, messages, and threads, with search hard-restricted to that conversation | the conversation read scopes, `search:read` |
-| Slack Thread | One message and its replies | `channels:history`, `groups:history`, `im:history`, `mpim:history` |
+| Slack Conversation | One channel, DM, or group DM — its info, members, messages, and threads, with search hard-restricted to that conversation | `team:read`, the conversation read scopes, `search:read` |
+| Slack Thread | One message and its replies | `team:read`, the conversation read scopes |
 
-The conversation read scopes are `channels`, `groups`, `im`, and `mpim`, each `:read` and `:history`. `users:read` is always requested, for account display and resolving mentions to names.
+The conversation read scopes are `channels`, `groups`, `im`, and `mpim`, each `:read` and `:history`. `users:read` is always requested, for account display and resolving mentions to names. Every read first confirms the connecting user still belongs to the bound workspace, which is why all three need `team:read`. A Conversation or Thread grant made without it (or, for a Thread, without the `:read` scopes) reads nothing until the user reconnects and consents to the missing scopes.
 
 The token is a Slack **user** token (`xoxp-…`), requested through `user_scope` rather than a bot token. That is what makes a connection reach private channels and DMs at all — but it also means the reach is exactly the connecting person's own, so a workspace grant is that user's whole Slack, not a bot's slice of it. Nobody gains data they could not already open themselves; what they gain is an agent acting as them.
 
@@ -335,9 +338,9 @@ Prefer wrapper-owned Workers and [service bindings](https://developers.cloudflar
 1. Record the current `cloudflare-os` gitlink for rollback.
 2. Update the submodule to the intended upstream commit.
 3. Review Workshop and Context Wrangler base-config changes and Gatekeeper contracts.
-4. Diff `cloudflare-os/pnpm-workspace.yaml`'s `catalog:` against this repository's and re-sync it. Two submodule packages are members of this workspace and resolve `catalog:` here, so a missing entry fails the install and a *stale* one silently gives the tree two copies of `capnweb` — a failure that only appears once the two installs are separate, as they are in CI.
+4. Diff `cloudflare-os/pnpm-workspace.yaml`'s `catalog:` against this repository's and re-sync it. Three submodule packages — `workshop-shared`, `error-reporting`, and the `scripts` tooling package `error-reporting` depends on — are members of this workspace and resolve `catalog:` here, so a missing entry fails the install and a *stale* one silently gives the tree two copies of `capnweb` — a failure that only appears once the two installs are separate, as they are in CI. The block is a verbatim copy, so an empty `diff` of the two is the check; then confirm `pnpm-lock.yaml` resolves the shared toolchain to the versions `cloudflare-os/pnpm-lock.yaml` does.
 5. Run `pnpm install`, `pnpm --dir cloudflare-os install`, `pnpm lint`, and `pnpm check`.
 6. Deploy and verify Access, administrator access, storage, configured AI, Context, custom observations, and the Error Reporter query surface.
-7. If needed, restore the previous gitlink and redeploy, or use [Workers rollback](https://developers.cloudflare.com/workers/versions-and-deployments/rollbacks/) when bindings remain compatible.
+7. If needed, restore the previous gitlink and redeploy, or use [Workers rollback](https://developers.cloudflare.com/workers/versions-and-deployments/rollbacks/) when bindings remain compatible. Either is only safe while the old version can still read the state the new one wrote, and Cloudflare refuses a rollback across a Durable Object migration; otherwise repair forward.
 
 Do not update the submodule blindly. The deployment script derives from upstream configs so incompatible base changes remain visible during review and checks.

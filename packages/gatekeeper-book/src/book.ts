@@ -7,6 +7,7 @@ import {
 import { skipRpcValidation, validateRpc } from "capnweb-validate";
 import type {
   AccountDescription,
+  AgentCatalog,
   ApprovalQueue,
   Gatekeeper,
   GatekeeperConnectCallback,
@@ -265,6 +266,11 @@ export class BookGatekeeper extends DurableObject<Cloudflare.Env>
     return [];
   }
 
+  /** No catalog: the session's types say everything there is to know. */
+  async getAgentCatalog(): Promise<AgentCatalog | null> {
+    return null;
+  }
+
   async startSession(approvalQueue: RpcStub<ApprovalQueue>): Promise<BookSession> {
     return new BookSessionImpl(
       approvalQueue.dup(),
@@ -326,6 +332,10 @@ export class BookAccount extends WorkerEntrypoint<Cloudflare.Env> implements Gat
 
   reconnect(): Promise<{ url: string }> {
     throw new Error("The Book gatekeeper is auto-provisioned and has no credentials to reconnect.");
+  }
+
+  commitReconnect(_stageId: string): Promise<void> {
+    throw new Error("The Book gatekeeper is auto-provisioned and has no connect flow.");
   }
 
   async getAuthenticatedEmail(): Promise<string | null> {

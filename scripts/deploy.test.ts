@@ -452,10 +452,11 @@ test("trims a trailing slash from the mirrored path", async () => {
 });
 
 /**
- * Gmail, Docs, Sheets, Calendar and BigQuery arrive together: they are resource types of one vendor
- * behind one OAuth client, so there is nothing here that selects among them. Which ones users may
- * reach is runtime policy in /admin, which opts resources *out* of an offer every bound Gatekeeper
- * makes by default (cloudflare-os/packages/workshop-backend/src/admin-config.ts).
+ * Gmail, Docs, Sheets, Slides, Drive, Calendar, Chat and BigQuery arrive together: they are
+ * resource types of one vendor behind one OAuth client, so there is nothing here that selects among
+ * them. Which ones users may reach is runtime policy in /admin, which opts resources *out* of an
+ * offer every bound Gatekeeper makes by default
+ * (cloudflare-os/packages/workshop-backend/src/admin-config.ts).
  */
 test("gives the Google Gatekeeper one OAuth client and the base URL it redirects to", async () => {
   const bases = await baseConfigs();
