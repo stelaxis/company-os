@@ -311,7 +311,7 @@ export async function syncMirror(
   }
 
   let removed = 0;
-  for (const [key] of [...kv.list<BookDocument>({ prefix: DOC_PREFIX })]) {
+  for (const [key] of Array.from(kv.list<BookDocument>({ prefix: DOC_PREFIX }))) {
     if (!keep.has(key)) {
       kv.delete(key);
       removed++;

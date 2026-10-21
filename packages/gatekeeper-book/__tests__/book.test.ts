@@ -17,7 +17,7 @@ class FakeKv implements SyncKvStorage {
   }
 
   list<T = unknown>(options?: SyncKvListOptions): Iterable<[string, T]> {
-    let entries = [...this.map.entries()].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+    let entries = [...this.map.entries()].toSorted(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
     if (options?.prefix) entries = entries.filter(([k]) => k.startsWith(options.prefix!));
     return entries as [string, T][];
   }

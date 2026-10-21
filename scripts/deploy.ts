@@ -604,10 +604,10 @@ export function generateConfigs(config: DeploymentConfig, bases: BaseConfigs): G
       service: config.workers.github.name,
       entrypoint: "GatekeeperVendor",
     },
-    // Gmail, Docs, Sheets, Calendar and BigQuery all arrive with this one binding: they are
-    // resource types of a single vendor, not separate Gatekeepers. Which of them users may reach is
-    // runtime policy in /admin, not a deploy-time choice -- every bound Gatekeeper is offered by
-    // default and the admin UI opts individual resources back out.
+    // Gmail, Docs, Sheets, Slides, Drive, Calendar, Chat and BigQuery all arrive with this one
+    // binding: they are resource types of a single vendor, not separate Gatekeepers. Which of them
+    // users may reach is runtime policy in /admin, not a deploy-time choice -- every bound
+    // Gatekeeper is offered by default and the admin UI opts individual resources back out.
     {
       binding: "GATEKEEPER_GOOGLE",
       service: config.workers.google.name,
@@ -688,8 +688,8 @@ export function generateConfigs(config: DeploymentConfig, bases: BaseConfigs): G
   // so it is derived here for the same reason.
   setCommon(google, config, config.workers.google.name);
   google.vars = { BASE_URL: `${origin}/gatekeeper/google` };
-  // One OAuth client behind all five Google resource types -- Gmail, Docs, Sheets, Calendar and
-  // BigQuery -- required for the same reason GitHub's is.
+  // One OAuth client behind all eight Google resource types -- Gmail, Docs, Sheets, Slides, Drive,
+  // Calendar, Chat and BigQuery -- required for the same reason GitHub's is.
   google.secrets = { required: ["CLIENT_ID", "CLIENT_SECRET"] };
 
   // The third Gatekeeper reading BASE_URL the same way, down to the same localhost default and the
@@ -801,7 +801,7 @@ export function buildCommands(config: DeploymentConfig): BuildCommand[] {
     // depends on, and running it here uncached is what upstream's own package `deploy` script does.
     { args: submoduleBuild("@gadgets/github-gatekeeper", "build:configurator") },
     { args: submoduleBuild("@gadgets/github-gatekeeper") },
-    // The same pair under the Google Gatekeeper's own names. `google.ts` imports five generated
+    // The same pair under the Google Gatekeeper's own names. `google.ts` imports ten generated
     // configurator bundles rather than one, but the reason for running the codegen by name -- and
     // therefore uncached -- is the same.
     { args: submoduleBuild("@gadgets/google-gatekeeper", "build:configurator") },
