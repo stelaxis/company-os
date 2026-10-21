@@ -173,10 +173,10 @@ Upstream's [`gatekeeper-slack`](../cloudflare-os/packages/gatekeeper-slack/READM
 | Resource | What connecting one gives an agent | User token scopes |
 | --- | --- | --- |
 | Slack Workspace | Channels, DMs, members, and search across the whole connected workspace, auto-detected from the account | `team:read`, the conversation read scopes, `search:read` |
-| Slack Conversation | One channel, DM, or group DM — its info, members, messages, and threads, with search hard-restricted to that conversation | the conversation read scopes, `search:read` |
-| Slack Thread | One message and its replies | `channels:history`, `groups:history`, `im:history`, `mpim:history` |
+| Slack Conversation | One channel, DM, or group DM — its info, members, messages, and threads, with search hard-restricted to that conversation | `team:read`, the conversation read scopes, `search:read` |
+| Slack Thread | One message and its replies | `team:read`, the conversation read scopes |
 
-The conversation read scopes are `channels`, `groups`, `im`, and `mpim`, each `:read` and `:history`. `users:read` is always requested, for account display and resolving mentions to names.
+The conversation read scopes are `channels`, `groups`, `im`, and `mpim`, each `:read` and `:history`. `users:read` is always requested, for account display and resolving mentions to names. Every read first confirms the connecting user still belongs to the bound workspace, which is why all three need `team:read`. A Conversation or Thread grant made without it (or, for a Thread, without the `:read` scopes) reads nothing until the user reconnects and consents to the missing scopes.
 
 The token is a Slack **user** token (`xoxp-…`), requested through `user_scope` rather than a bot token. That is what makes a connection reach private channels and DMs at all — but it also means the reach is exactly the connecting person's own, so a workspace grant is that user's whole Slack, not a bot's slice of it. Nobody gains data they could not already open themselves; what they gain is an agent acting as them.
 
